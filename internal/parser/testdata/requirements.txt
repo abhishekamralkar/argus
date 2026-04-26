@@ -1,0 +1,8 @@
+# Production dependencies
+flask==2.3.2
+requests>=2.28.0
+django~=4.2.0
+pillow!=9.0.0,>=8.0.0
+numpy  # no version pin
+-r other-requirements.txt
+cryptography==41.0.4

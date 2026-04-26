@@ -1,0 +1,25 @@
+# Build output
+vulnscan
+**/vulnscan
+/dist/
+
+# Database files
+*.db
+*.db.wal
+*.duckdb
+
+# Go
+vendor/
+*.test
+*.out
+coverage.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
