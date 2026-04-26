@@ -1,7 +1,9 @@
 # Build output
-vulnscan
-**/vulnscan
+argus
 /dist/
+
+# Claude Code
+.claude/
 
 # Database files
 *.db
