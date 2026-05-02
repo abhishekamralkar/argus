@@ -2,8 +2,34 @@
 
 A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, **Python**, and **Rust** projects — powered entirely by local [Ollama](https://ollama.com) models. No API keys. No cloud. Your code stays on your machine.
 
+[![CI](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://golang.org)
+[![Release](https://img.shields.io/github/v/release/abhishekamralkar/argus)](https://github.com/abhishekamralkar/argus/releases)
+
+---
+
+## Quick start
+
+```bash
+# 1. Install
+go install github.com/abhishekamralkar/argus/cmd/argus@latest
+
+# 2. Start Ollama and pull models
+ollama pull nomic-embed-text
+ollama pull gpt-oss:20b
+
+# 3. Ingest vulnerability databases (one-time, ~5–10 min)
+argus ingest --ecosystems go
+
+# 4. Scan your project
+argus scan /path/to/your/project
+
+# 5. Check version
+argus version
+```
+
+That's it. Results stream to your terminal; exit code is `1` when HIGH/CRITICAL findings are present.
 
 ---
 
@@ -14,9 +40,9 @@ A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, *
 │                        INGEST (one-time)                        │
 │                                                                 │
 │  OSV Feed ──┐                                                   │
-│  GoVulnDB ──┼──► Parse ──► Embed (nomic-embed-text) ──► DuckDB │
-│  RustSec  ──┤             (Ollama, local)               (local) │
-│  PyPA     ──┘                                                   │
+│  GoVulnDB ──┼──► Parse ──► Chunk ──► Embed (nomic-embed-text)  │
+│  RustSec  ──┤              512 chars   (Ollama, local)          │
+│  PyPA     ──┘                    ──► DuckDB (local)             │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -28,14 +54,14 @@ A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, *
 │  Parse deps ──► Embed query ──► Cosine search (DuckDB)         │
 │                                       │                         │
 │                                       ▼                         │
-│                              Retrieved CVEs + context           │
+│                       Version-aware CVE filter                  │
 │                                       │                         │
 │                                       ▼                         │
 │                           LLM prompt (gpt-oss:20b) ──► Report  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Vulnerability databases are embedded once and stored locally in DuckDB. Each scan embeds your dependency query and retrieves semantically similar CVEs, which are fed to a local LLM to generate a human-readable security report.
+Vulnerability databases are chunked, embedded, and stored locally in DuckDB. Each scan embeds your dependency query, retrieves semantically similar CVE chunks, filters out advisories your version has already fixed, and feeds the remaining context to a local LLM for a human-readable security report.
 
 ---
 
@@ -44,8 +70,12 @@ Vulnerability databases are embedded once and stored locally in DuckDB. Each sca
 - **Fully local** — Ollama models, DuckDB on disk, no external API calls after ingestion
 - **Multi-language** — Go (`go.mod`), Python (`requirements.txt`), Rust (`Cargo.toml`)
 - **Four vulnerability databases** — OSV, Go Vulnerability Database, RustSec, PyPA
+- **Document chunking** — long advisories split into overlapping 512-char chunks for higher-precision retrieval
+- **Version-aware matching** — CVEs already fixed in your version are silently skipped
 - **Semantic search** — finds relevant CVEs even when package names don't match exactly
 - **Streaming output** — LLM analysis streams token-by-token to your terminal
+- **Multiple output formats** — `text` (default), `json`, `sarif` (GitHub Security tab compatible)
+- **Parallel scanning** — dependencies analyzed concurrently with a configurable worker pool
 - **CI-friendly** — exits with code `1` when HIGH/CRITICAL vulnerabilities are found
 - **Idempotent ingestion** — re-running `ingest` upserts without duplicates
 
@@ -70,45 +100,56 @@ ollama pull gpt-oss:20b        # LLM for vulnerability analysis
 
 ## Installation
 
+### From source
+
 ```bash
 git clone https://github.com/abhishekamralkar/argus.git
 cd argus
-go build -o argus ./cmd/argus
+make build           # embeds git version in binary
+./argus version
 ```
 
-Or install directly:
+### go install
 
 ```bash
 go install github.com/abhishekamralkar/argus/cmd/argus@latest
 ```
 
+### Download a release binary
+
+Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/abhishekamralkar/argus/releases) page.
+
 ---
 
 ## Usage
 
-### Step 1 — Ingest vulnerability databases
+### ingest — populate the vulnerability database
 
-Downloads and embeds all vulnerability databases into a local DuckDB file. Run this once, then periodically to pick up new advisories.
+Downloads and embeds all vulnerability databases into a local DuckDB file. Run once, then periodically to pick up new advisories.
 
 ```bash
+# All ecosystems (default)
 argus ingest
-```
 
-Ingest specific ecosystems only:
-
-```bash
+# Specific ecosystems
 argus ingest --ecosystems go,python
-```
 
-Custom DB path:
-
-```bash
+# Custom database path
 argus ingest --db /var/lib/argus/vulns.db
+
+# Tune chunking (default: 512 chars, 64 overlap)
+argus ingest --chunk-size 256 --chunk-overlap 32
+
+# Legacy single-embedding mode (no chunking)
+argus ingest --no-chunk
+
+# More parallelism for faster embedding
+argus ingest --workers 16
 ```
 
 **What gets downloaded:**
 
-| Source | Ecosystem | URL |
+| Source | Ecosystems | URL |
 |---|---|---|
 | OSV | Go, Python, Rust | `osv-vulnerabilities.storage.googleapis.com` |
 | Go Vulnerability DB | Go | `vuln.go.dev` |
@@ -117,48 +158,90 @@ argus ingest --db /var/lib/argus/vulns.db
 
 ---
 
-### Step 2 — Scan a project
+### scan — analyse a project's dependencies
 
-Point `argus scan` at any project directory containing a `go.mod`, `requirements.txt`, or `Cargo.toml`:
+Point `argus scan` at any project directory containing `go.mod`, `requirements.txt`, or `Cargo.toml`:
 
 ```bash
 argus scan /path/to/your/project
 ```
 
-Example output:
+**Text output (default):**
 
 ```
-=== argus: /path/to/your/project (42 dependencies) ===
+╔══════════════════════════════════════════════════════╗
+║  argus scan: /path/to/your/project                  ║
+║  42 dependencies found                               ║
+╚══════════════════════════════════════════════════════╝
 
---- golang.org/x/crypto@0.0.0-20190308221718 (go) ---
-1. Vulnerable: YES
-2. Severity: HIGH
-3. Advisory: GO-2021-0227 (CVE-2021-43565)
-4. Fix: upgrade to golang.org/x/crypto v0.17.0 or later
-5. The SSH server implementation accepts an empty plaintext password
-   even when the server has disabled password authentication. An
-   attacker can bypass authentication on affected servers.
+┌─ [1/42] golang.org/x/crypto @ 0.0.0-20190308221718 (go)
 
---- flask@2.3.2 (python) ---
-No known vulnerabilities found for flask@2.3.2.
+ ID             | PACKAGE              | SEVERITY | FIXED IN | SCORE
+ GO-2021-0227   | golang.org/x/crypto  | HIGH     | 0.17.0   | 0.923
 
---- serde@1.0 (rust) ---
-No known vulnerabilities found for serde@1.0.
+  Analyzing with gpt-oss:20b (streaming)...
+  ────────────────────────────────────────────────────────────
+  1. Vulnerable: YES
+  2. Severity: HIGH
+  3. Advisory: GO-2021-0227 (CVE-2021-43565)
+  4. Fix: upgrade to golang.org/x/crypto v0.17.0 or later
+  5. The SSH server implementation accepts an empty plaintext
+     password even when password auth is disabled.
 ```
 
-Flags:
+**JSON output:**
+
+```bash
+argus scan . --output json > results.json
+```
+
+```json
+{
+  "scanned_at": "2026-05-02T10:00:00Z",
+  "results": [
+    {
+      "package": "golang.org/x/crypto",
+      "version": "0.0.0-20190308221718",
+      "ecosystem": "go",
+      "verdict": "HIGH",
+      "severity": "HIGH",
+      "cve_count": 1,
+      "findings": [
+        {
+          "id": "GO-2021-0227",
+          "severity": "HIGH",
+          "fixed_in": "0.17.0",
+          "score": 0.923
+        }
+      ]
+    }
+  ]
+}
+```
+
+**SARIF output** (for GitHub Security tab):
+
+```bash
+argus scan . --output sarif > results.sarif
+```
+
+Upload `results.sarif` as a GitHub Actions artifact with `github/codeql-action/upload-sarif` and findings appear natively in the Security tab.
+
+**All scan flags:**
 
 ```bash
 argus scan /path/to/project \
   --db ./vulns.db \
   --llm-model gpt-oss:20b \
   --embed-model nomic-embed-text \
-  --output text
+  --output text|json|sarif \
+  --workers 4 \
+  --enhance-query        # LLM expands query before embedding
 ```
 
 ---
 
-### Step 3 — Ad-hoc semantic search
+### search — ad-hoc semantic search
 
 Search the vulnerability database without running a full scan:
 
@@ -168,23 +251,11 @@ argus search "memory corruption" --ecosystem rust
 argus search "path traversal" --ecosystem go --limit 5
 ```
 
-Example output:
-
-```
-[0.891] PYSEC-2024-52 | sqlalchemy | HIGH | fixed: 2.0.21
-  SQL injection via unsanitized input in ORM query builder
-
-[0.834] GHSA-xxxx-yyyy-zzzz | django | MEDIUM | fixed: 4.2.4
-  QuerySet.annotate() vulnerable to SQL injection
-```
-
 ---
 
 ## Configuration
 
-All configuration is via flags and environment variables:
-
-| Flag | Env var | Default | Description |
+| Flag | Env | Default | Description |
 |---|---|---|---|
 | `--db` | — | `./vulns.db` | DuckDB database path |
 | `--embed-model` | — | `nomic-embed-text` | Ollama embedding model |
@@ -193,42 +264,60 @@ All configuration is via flags and environment variables:
 
 ---
 
-## CI/CD Integration
+## CI/CD integration
 
-`argus scan` exits with code `1` when HIGH or CRITICAL vulnerabilities are detected, making it easy to fail pipelines.
-
-**GitHub Actions:**
+### Basic GitHub Actions
 
 ```yaml
 - name: Install argus
   run: go install github.com/abhishekamralkar/argus/cmd/argus@latest
 
-- name: Start Ollama
-  run: |
-    curl -fsSL https://ollama.com/install.sh | sh
-    ollama serve &
-    sleep 5
-    ollama pull nomic-embed-text
-    ollama pull gpt-oss:20b
-
 - name: Ingest vulnerability databases
-  run: argus ingest
+  run: argus ingest --ecosystems go   # cache vulns.db between runs
 
 - name: Scan dependencies
   run: argus scan .
+  # exits 1 on HIGH/CRITICAL findings
+```
+
+### With SARIF upload
+
+```yaml
+- name: Scan and emit SARIF
+  run: argus scan . --output sarif > argus.sarif
+
+- name: Upload SARIF to GitHub Security tab
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: argus.sarif
+```
+
+### Cache the vulnerability database
+
+```yaml
+- name: Cache argus DB
+  uses: actions/cache@v4
+  with:
+    path: vulns.db
+    key: argus-vulns-${{ runner.os }}-${{ steps.date.outputs.date }}
+    restore-keys: argus-vulns-${{ runner.os }}-
 ```
 
 ---
 
 ## Inspecting the database
 
-Use the DuckDB CLI to query `vulns.db` directly:
-
 ```bash
 duckdb vulns.db
 
--- counts per ecosystem
+-- row counts per ecosystem
 SELECT ecosystem, COUNT(*) FROM vulnerabilities GROUP BY ecosystem;
+
+-- chunk coverage (chunked ingestion)
+SELECT v.ecosystem, COUNT(c.chunk_id) AS chunks
+FROM vulnerability_chunks c
+JOIN vulnerabilities v ON c.vuln_id = v.id
+GROUP BY v.ecosystem;
 
 -- CRITICAL vulnerabilities with no fix
 SELECT id, package, ecosystem
@@ -241,28 +330,31 @@ FROM vulnerabilities
 WHERE package ILIKE '%requests%' AND ecosystem = 'python';
 ```
 
-See [DuckDB commands reference](docs/duckdb-commands.md) for more.
-
 ---
 
 ## Project structure
 
 ```
-cmd/argus/main.go          CLI entry point (cobra)
+cmd/argus/main.go            CLI entry point (cobra)
 internal/
-  embed/ollama.go             Ollama embedding client (nomic-embed-text)
-  llm/ollama.go               Ollama generation client (gpt-oss:20b, streaming)
-  store/duckdb.go             DuckDB vector store — schema, upsert, similarity search
+  embed/ollama.go              Ollama embedding client (nomic-embed-text)
+  llm/ollama.go                Ollama generation client (gpt-oss:20b, streaming)
+  store/
+    duckdb.go                  DuckDB vector store — schema, upsert, similarity search
+    types.go                   Shared types (Vulnerability)
   ingest/
-    osv.go                    OSV vulnerability feed (Go, PyPI, crates.io)
-    govuln.go                 Go Vulnerability Database
-    rustsec.go                RustSec advisory database
-    pypa.go                   PyPA advisory database
+    osv.go                     OSV vulnerability feed (Go, PyPI, crates.io)
+    govuln.go                  Go Vulnerability Database
+    rustsec.go                 RustSec advisory database
+    pypa.go                    PyPA advisory database
+    chunk.go                   Document chunking (paragraph → sentence → char split)
   parser/
-    gomod.go                  go.mod parser
-    requirements.go           requirements.txt parser
-    cargotoml.go              Cargo.toml parser
-  rag/query.go                RAG pipeline — embed, retrieve, prompt, generate
+    gomod.go                   go.mod parser
+    requirements.go            requirements.txt parser
+    cargotoml.go               Cargo.toml parser
+  rag/query.go                 RAG pipeline — embed, retrieve, version-filter, prompt, generate
+  version/compare.go           Semver comparison for version-aware CVE filtering
+  output/output.go             JSON and SARIF report writers
 ```
 
 ---
@@ -271,9 +363,11 @@ internal/
 
 ```bash
 go test ./...
+go test -race ./...
 ```
 
-Parser tests run entirely offline using fixture files in `internal/parser/testdata/`.
+Parser tests run offline using fixture files in `internal/parser/testdata/`.
+Version comparison tests are in `internal/version/`.
 
 ---
 
@@ -281,14 +375,12 @@ Parser tests run entirely offline using fixture files in `internal/parser/testda
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-Ideas for contribution:
+Ideas for future contribution:
 
-- JSON output format for `scan`
-- Support for `poetry.lock`, `Pipfile.lock`, `go.sum`
-- Query expansion (LLM rewrites user query before embedding)
-- Document chunking for long advisories
-- Web UI / TUI frontend
-- Support for additional Ollama models
+- Support for `poetry.lock`, `Pipfile.lock`, `go.sum` lock files
+- TUI / web frontend for interactive browsing
+- Additional ecosystems (npm, Maven, NuGet)
+- Scheduled auto-reingest via cron/systemd
 
 ---
 

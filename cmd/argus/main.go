@@ -8,16 +8,21 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/abhishekamralkar/argus/internal/embed"
 	"github.com/abhishekamralkar/argus/internal/ingest"
 	"github.com/abhishekamralkar/argus/internal/llm"
+	"github.com/abhishekamralkar/argus/internal/output"
 	"github.com/abhishekamralkar/argus/internal/parser"
 	"github.com/abhishekamralkar/argus/internal/rag"
 	"github.com/abhishekamralkar/argus/internal/store"
 )
+
+// Version is set at build time via -ldflags "-X main.Version=v1.2.3".
+var Version = "dev"
 
 func main() {
 	root := &cobra.Command{
@@ -31,19 +36,39 @@ func main() {
 	root.AddCommand(ingestCmd(&dbPath))
 	root.AddCommand(scanCmd(&dbPath))
 	root.AddCommand(searchCmd(&dbPath))
+	root.AddCommand(versionCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("argus %s\n", Version)
+		},
+	}
+}
+
 // ── ingest ──────────────────────────────────────────────────────────────────
+
+type chunkConfig struct {
+	enabled bool
+	size    int
+	overlap int
+}
 
 func ingestCmd(dbPath *string) *cobra.Command {
 	var ecosystems string
 	var embedModel string
 	var workers int
 	var skipExisting bool
+	var noChunk bool
+	var chunkSize int
+	var chunkOverlap int
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -55,13 +80,19 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			}
 			defer db.Close()
 
+			cc := chunkConfig{
+				enabled: !noChunk,
+				size:    chunkSize,
+				overlap: chunkOverlap,
+			}
+
 			embedder := embed.NewClient(embedModel)
 			for eco := range strings.SplitSeq(ecosystems, ",") {
 				eco = strings.TrimSpace(eco)
 				if eco == "" {
 					continue
 				}
-				if err := runIngest(db, embedder, eco, workers, skipExisting); err != nil {
+				if err := runIngest(db, embedder, eco, workers, skipExisting, cc); err != nil {
 					fmt.Fprintf(os.Stderr, "ingest %s: %v\n", eco, err)
 				}
 			}
@@ -72,12 +103,15 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&workers, "workers", 8, "parallel embedding workers")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", true, "skip vulnerabilities already in the database")
+	cmd.Flags().BoolVar(&noChunk, "no-chunk", false, "disable document chunking (store whole advisory as one embedding)")
+	cmd.Flags().IntVar(&chunkSize, "chunk-size", ingest.DefaultChunkSize, "max characters per chunk")
+	cmd.Flags().IntVar(&chunkOverlap, "chunk-overlap", ingest.DefaultChunkOverlap, "overlap characters between chunks")
 	return cmd
 }
 
 const batchSize = 50
 
-func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorkers int, skipExisting bool) error {
+func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig) error {
 	type source struct {
 		name string
 		fn   func(func(*store.Vulnerability) error) error
@@ -105,8 +139,8 @@ func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorker
 	}
 
 	for _, src := range sources {
-		fmt.Printf("Ingesting %s (workers=%d)...\n", src.name, numWorkers)
-		if err := ingestSource(db, embedder, src.name, src.fn, numWorkers, skipExisting); err != nil {
+		fmt.Printf("Ingesting %s (workers=%d, chunk=%v)...\n", src.name, numWorkers, cc.enabled)
+		if err := ingestSource(db, embedder, src.name, src.fn, numWorkers, skipExisting, cc); err != nil {
 			fmt.Fprintf(os.Stderr, "  source %s failed: %v\n", src.name, err)
 		}
 	}
@@ -116,6 +150,19 @@ func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorker
 	return nil
 }
 
+// chunkWork is the unit sent to embed workers when chunking is enabled.
+type chunkWork struct {
+	vuln    *store.Vulnerability
+	chunkID string
+	text    string
+}
+
+// chunkResult is what workers send to the batch writer when chunking.
+type chunkResult struct {
+	vuln    *store.Vulnerability
+	item    store.ChunkItem
+}
+
 func ingestSource(
 	db *store.DB,
 	embedder *embed.Client,
@@ -123,16 +170,30 @@ func ingestSource(
 	loader func(func(*store.Vulnerability) error) error,
 	numWorkers int,
 	skipExisting bool,
+	cc chunkConfig,
 ) error {
 	bar := progressbar.Default(-1, name)
 	var errCount atomic.Int64
 
-	// workCh carries raw vulnerabilities to embed workers.
+	if cc.enabled {
+		return ingestSourceChunked(db, embedder, name, loader, numWorkers, skipExisting, cc, bar, &errCount)
+	}
+	return ingestSourceWhole(db, embedder, name, loader, numWorkers, skipExisting, bar, &errCount)
+}
+
+func ingestSourceWhole(
+	db *store.DB,
+	embedder *embed.Client,
+	name string,
+	loader func(func(*store.Vulnerability) error) error,
+	numWorkers int,
+	skipExisting bool,
+	bar interface{ Add(int) error },
+	errCount *atomic.Int64,
+) error {
 	workCh := make(chan *store.Vulnerability, numWorkers*4)
-	// resultCh carries embedded results to the single batch-writer.
 	resultCh := make(chan store.EmbeddedVuln, numWorkers*4)
 
-	// Embed workers
 	var wg sync.WaitGroup
 	for range numWorkers {
 		wg.Go(func() {
@@ -146,40 +207,31 @@ func ingestSource(
 			}
 		})
 	}
+	go func() { wg.Wait(); close(resultCh) }()
 
-	// Close resultCh once all workers finish.
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	// Batch writer — single goroutine owns all DB writes.
 	writerDone := make(chan error, 1)
 	go func() {
 		batch := make([]store.EmbeddedVuln, 0, batchSize)
-		for item := range resultCh {
-			batch = append(batch, item)
-			if len(batch) >= batchSize {
-				if err := db.UpsertBatch(batch); err != nil {
-					errCount.Add(int64(len(batch)))
-				} else {
-					bar.Add(len(batch))
-				}
-				batch = batch[:0]
-			}
-		}
-		// flush remainder
-		if len(batch) > 0 {
+		flush := func() {
 			if err := db.UpsertBatch(batch); err != nil {
 				errCount.Add(int64(len(batch)))
 			} else {
 				bar.Add(len(batch))
 			}
+			batch = batch[:0]
+		}
+		for item := range resultCh {
+			batch = append(batch, item)
+			if len(batch) >= batchSize {
+				flush()
+			}
+		}
+		if len(batch) > 0 {
+			flush()
 		}
 		writerDone <- nil
 	}()
 
-	// Producer: feed vulnerabilities into workCh.
 	err := loader(func(v *store.Vulnerability) error {
 		if skipExisting && db.Exists(v.ID) {
 			return nil
@@ -188,12 +240,101 @@ func ingestSource(
 		return nil
 	})
 	close(workCh)
-
 	<-writerDone
-	bar.Finish()
 
 	if n := errCount.Load(); n > 0 {
 		fmt.Printf("  %s: %d entries skipped due to errors\n", name, n)
+	}
+	return err
+}
+
+func ingestSourceChunked(
+	db *store.DB,
+	embedder *embed.Client,
+	name string,
+	loader func(func(*store.Vulnerability) error) error,
+	numWorkers int,
+	skipExisting bool,
+	cc chunkConfig,
+	bar interface{ Add(int) error },
+	errCount *atomic.Int64,
+) error {
+	workCh := make(chan chunkWork, numWorkers*4)
+	resultCh := make(chan chunkResult, numWorkers*4)
+
+	var wg sync.WaitGroup
+	for range numWorkers {
+		wg.Go(func() {
+			for w := range workCh {
+				vec, err := embedder.Embed(w.text)
+				if err != nil {
+					errCount.Add(1)
+					continue
+				}
+				resultCh <- chunkResult{
+					vuln: w.vuln,
+					item: store.ChunkItem{
+						ChunkID:   w.chunkID,
+						VulnID:    w.vuln.ID,
+						Content:   w.text,
+						Embedding: vec,
+					},
+				}
+			}
+		})
+	}
+	go func() { wg.Wait(); close(resultCh) }()
+
+	writerDone := make(chan error, 1)
+	go func() {
+		batch := make([]store.ChunkItem, 0, batchSize)
+		flush := func() {
+			if err := db.UpsertChunkBatch(batch); err != nil {
+				errCount.Add(int64(len(batch)))
+			} else {
+				bar.Add(len(batch))
+			}
+			batch = batch[:0]
+		}
+		for r := range resultCh {
+			batch = append(batch, r.item)
+			if len(batch) >= batchSize {
+				flush()
+			}
+		}
+		if len(batch) > 0 {
+			flush()
+		}
+		writerDone <- nil
+	}()
+
+	err := loader(func(v *store.Vulnerability) error {
+		if skipExisting && db.ExistsVuln(v.ID) {
+			return nil
+		}
+		if err := db.UpsertVulnMeta(v); err != nil {
+			errCount.Add(1)
+			return nil
+		}
+		text := v.Summary
+		if v.Details != "" {
+			text += "\n" + v.Details
+		}
+		chunks := ingest.ChunkText(text, cc.size, cc.overlap)
+		for i, chunk := range chunks {
+			workCh <- chunkWork{
+				vuln:    v,
+				chunkID: fmt.Sprintf("%s_c%d", v.ID, i),
+				text:    chunk,
+			}
+		}
+		return nil
+	})
+	close(workCh)
+	<-writerDone
+
+	if n := errCount.Load(); n > 0 {
+		fmt.Printf("  %s: %d chunks skipped due to errors\n", name, n)
 	}
 	return err
 }
@@ -204,6 +345,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var llmModel string
 	var embedModel string
 	var outputFmt string
+	var enhanceQuery bool
+	var workers int
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -220,7 +363,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 
 			embedder := embed.NewClient(embedModel)
 			generator := llm.NewClient(llmModel)
-			engine := rag.NewEngine(db, embedder, generator)
+			engine := rag.NewEngine(db, embedder, generator, enhanceQuery)
 
 			deps, err := detectAndParse(projectDir)
 			if err != nil {
@@ -231,28 +374,94 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("=== argus: %s (%d dependencies) ===\n\n", projectDir, len(deps))
+			isText := outputFmt == "text"
 
-			highFound := false
-			for _, dep := range deps {
-				fmt.Printf("--- %s@%s (%s) ---\n", dep.Name, dep.Version, dep.Ecosystem)
-				if err := engine.AnalyzeDependency(dep, os.Stdout); err != nil {
-					fmt.Fprintf(os.Stderr, "  analysis failed: %v\n", err)
-				}
-				fmt.Println()
+			if isText {
+				fmt.Printf("\n╔══════════════════════════════════════════════════════╗\n")
+				fmt.Printf("║  argus scan: %-39s║\n", truncatePath(projectDir, 39))
+				fmt.Printf("║  %d dependencies found%-32s║\n", len(deps), "")
+				fmt.Printf("╚══════════════════════════════════════════════════════╝\n\n")
 			}
 
-			_ = outputFmt // reserved for JSON output mode
-			if highFound {
-				os.Exit(1)
+			results := parallelScan(engine, deps, workers, isText)
+
+			switch outputFmt {
+			case "json":
+				return output.WriteJSON(os.Stdout, results)
+			case "sarif":
+				return output.WriteSARIF(os.Stdout, results, projectDir)
+			default:
+				printSummaryTable(results)
+			}
+
+			for _, r := range results {
+				if r.Verdict() == "CRITICAL" || r.Verdict() == "HIGH" {
+					os.Exit(1)
+				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Ollama LLM model (default: gpt-oss:20b)")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
-	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text or json")
+	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, or sarif")
+	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
+	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
 	return cmd
+}
+
+// parallelScan runs AnalyzeDependency for each dep concurrently, preserving order.
+func parallelScan(engine *rag.Engine, deps []parser.Dependency, workers int, verbose bool) []rag.Result {
+	type indexed struct {
+		i      int
+		result rag.Result
+	}
+
+	depCh := make(chan struct {
+		i   int
+		dep parser.Dependency
+	}, len(deps))
+	for i, d := range deps {
+		depCh <- struct {
+			i   int
+			dep parser.Dependency
+		}{i, d}
+	}
+	close(depCh)
+
+	resultCh := make(chan indexed, len(deps))
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range depCh {
+				var out strings.Builder
+				if verbose {
+					fmt.Printf("┌─ [%d/%d] %s @ %s (%s)\n",
+						work.i+1, len(deps), work.dep.Name, work.dep.Version, work.dep.Ecosystem)
+				}
+				r, err := engine.AnalyzeDependency(work.dep, os.Stdout)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  analysis failed for %s: %v\n", work.dep.Name, err)
+				}
+				_ = out
+				if verbose {
+					fmt.Println()
+				}
+				resultCh <- indexed{work.i, r}
+			}
+		}()
+	}
+
+	go func() { wg.Wait(); close(resultCh) }()
+
+	results := make([]rag.Result, len(deps))
+	for ir := range resultCh {
+		results[ir.i] = ir.result
+	}
+	return results
 }
 
 func detectAndParse(dir string) ([]parser.Dependency, error) {
@@ -333,4 +542,37 @@ func searchCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&limit, "limit", 10, "maximum results to return")
 	return cmd
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+func printSummaryTable(results []rag.Result) {
+	fmt.Printf("\n╔══════════════════════════════════════╗\n")
+	fmt.Printf("║           SCAN SUMMARY               ║\n")
+	fmt.Printf("╚══════════════════════════════════════╝\n\n")
+
+	t := tablewriter.NewWriter(os.Stdout)
+	t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Verdict")
+	for _, r := range results {
+		sev := r.TopSeverity
+		if sev == "" {
+			sev = "—"
+		}
+		t.Append([]string{
+			r.Dep.Name,
+			r.Dep.Version,
+			r.Dep.Ecosystem,
+			fmt.Sprintf("%d", r.RetrievedCount),
+			sev,
+			r.Verdict(),
+		})
+	}
+	t.Render()
+}
+
+func truncatePath(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return "..." + s[len(s)-(max-3):]
 }
