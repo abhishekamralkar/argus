@@ -19,6 +19,8 @@ type Client struct {
 	client *http.Client
 }
 
+func (c *Client) Model() string { return c.model }
+
 func NewClient(model string) *Client {
 	host := os.Getenv("OLLAMA_HOST")
 	if host == "" {

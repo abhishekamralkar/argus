@@ -42,8 +42,136 @@ func migrate(db *sql.DB) error {
 			embedding FLOAT[768]
 		);
 		CREATE INDEX IF NOT EXISTS idx_eco_pkg ON vulnerabilities (ecosystem, package);
+
+		CREATE TABLE IF NOT EXISTS vulnerability_chunks (
+			chunk_id  VARCHAR PRIMARY KEY,
+			vuln_id   VARCHAR NOT NULL,
+			content   TEXT NOT NULL,
+			embedding FLOAT[768]
+		);
+		CREATE INDEX IF NOT EXISTS idx_chunks_vuln ON vulnerability_chunks (vuln_id);
 	`)
 	return err
+}
+
+// UpsertVulnMeta stores only the vulnerability metadata (no embedding).
+func (s *DB) UpsertVulnMeta(v *Vulnerability) error {
+	_, err := s.db.Exec(`
+		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, content)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			severity = excluded.severity,
+			fixed_in = excluded.fixed_in,
+			content  = excluded.content
+	`, v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, v.Summary+"\n"+v.Details)
+	return err
+}
+
+type ChunkItem struct {
+	ChunkID   string
+	VulnID    string
+	Content   string
+	Embedding []float32
+}
+
+// UpsertChunkBatch writes a slice of embedded chunks in a single transaction.
+func (s *DB) UpsertChunkBatch(chunks []ChunkItem) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, c := range chunks {
+		_, err := tx.Exec(fmt.Sprintf(`
+			INSERT INTO vulnerability_chunks (chunk_id, vuln_id, content, embedding)
+			VALUES (?, ?, ?, %s::FLOAT[768])
+			ON CONFLICT (chunk_id) DO UPDATE SET
+				content   = excluded.content,
+				embedding = excluded.embedding
+		`, floatSliceToArray(c.Embedding)),
+			c.ChunkID, c.VulnID, c.Content,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ExistsVuln returns true if any chunks have been stored for this vulnerability ID.
+func (s *DB) ExistsVuln(id string) bool {
+	var n int
+	s.db.QueryRow(`SELECT 1 FROM vulnerability_chunks WHERE vuln_id = ? LIMIT 1`, id).Scan(&n)
+	return n == 1
+}
+
+// SearchBest searches vulnerability_chunks when available, falling back to
+// the legacy vulnerabilities.embedding for DBs ingested without chunking.
+func (s *DB) SearchBest(ecosystem string, embedding []float32, limit int) ([]SearchResult, error) {
+	// Check whether the chunks table has any data for this ecosystem.
+	var chunkCount int64
+	s.db.QueryRow(`
+		SELECT COUNT(*) FROM vulnerability_chunks c
+		JOIN vulnerabilities v ON c.vuln_id = v.id
+		WHERE v.ecosystem = ? LIMIT 1
+	`, ecosystem).Scan(&chunkCount)
+
+	if chunkCount > 0 {
+		return s.searchChunks(ecosystem, embedding, limit)
+	}
+	return s.Search(ecosystem, embedding, limit)
+}
+
+// searchChunks finds the best-matching chunk per vulnerability and deduplicates.
+func (s *DB) searchChunks(ecosystem string, embedding []float32, limit int) ([]SearchResult, error) {
+	arr := floatSliceToArray(embedding)
+	// Retrieve more candidates than limit to allow deduplication.
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT c.vuln_id, v.ecosystem, v.package, v.severity, v.fixed_in, c.content,
+		       array_cosine_similarity(c.embedding, %s::FLOAT[768]) AS score
+		FROM vulnerability_chunks c
+		JOIN vulnerabilities v ON c.vuln_id = v.id
+		WHERE v.ecosystem = ?
+		  AND array_cosine_similarity(c.embedding, %s::FLOAT[768]) > 0.5
+		ORDER BY score DESC
+		LIMIT ?
+	`, arr, arr), ecosystem, limit*3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seen := make(map[string]bool)
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		if err := rows.Scan(&r.ID, &r.Ecosystem, &r.Package, &r.Severity, &r.FixedIn, &r.Content, &r.Score); err != nil {
+			return nil, err
+		}
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		results = append(results, r)
+		if len(results) >= limit {
+			break
+		}
+	}
+	return results, rows.Err()
+}
+
+func (s *DB) CountChunks(ecosystem string) (int64, error) {
+	var n int64
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM vulnerability_chunks c
+		JOIN vulnerabilities v ON c.vuln_id = v.id
+		WHERE v.ecosystem = ?
+	`, ecosystem).Scan(&n)
+	return n, err
 }
 
 func (s *DB) Upsert(v *Vulnerability, embedding []float32) error {
@@ -57,18 +185,16 @@ func (s *DB) Upsert(v *Vulnerability, embedding []float32) error {
 	if len(content) > 4000 {
 		content = content[:4000]
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(fmt.Sprintf(`
 		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, content, embedding)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, %s::FLOAT[768])
 		ON CONFLICT (id) DO UPDATE SET
-			ecosystem = excluded.ecosystem,
-			package   = excluded.package,
 			severity  = excluded.severity,
 			fixed_in  = excluded.fixed_in,
 			content   = excluded.content,
 			embedding = excluded.embedding
-	`,
-		v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, content, floatSliceToArray(embedding),
+	`, floatSliceToArray(embedding)),
+		v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, content,
 	)
 	return err
 }
@@ -137,22 +263,6 @@ func (s *DB) UpsertBatch(batch []EmbeddedVuln) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, content, embedding)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET
-			ecosystem = excluded.ecosystem,
-			package   = excluded.package,
-			severity  = excluded.severity,
-			fixed_in  = excluded.fixed_in,
-			content   = excluded.content,
-			embedding = excluded.embedding
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
 	for _, item := range batch {
 		v := item.Vuln
 		content := v.Summary
@@ -162,7 +272,18 @@ func (s *DB) UpsertBatch(batch []EmbeddedVuln) error {
 		if len(content) > 4000 {
 			content = content[:4000]
 		}
-		if _, err := stmt.Exec(v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, content, floatSliceToArray(item.Embedding)); err != nil {
+		_, err := tx.Exec(fmt.Sprintf(`
+			INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, content, embedding)
+			VALUES (?, ?, ?, ?, ?, ?, %s::FLOAT[768])
+			ON CONFLICT (id) DO UPDATE SET
+				severity  = excluded.severity,
+				fixed_in  = excluded.fixed_in,
+				content   = excluded.content,
+				embedding = excluded.embedding
+		`, floatSliceToArray(item.Embedding)),
+			v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, content,
+		)
+		if err != nil {
 			return err
 		}
 	}
