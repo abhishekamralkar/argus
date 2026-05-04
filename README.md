@@ -4,7 +4,7 @@ A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, *
 
 [![CI](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://golang.org)
 [![Release](https://img.shields.io/github/v/release/abhishekamralkar/argus)](https://github.com/abhishekamralkar/argus/releases)
 
 ---
@@ -89,7 +89,7 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Go | 1.21+ | `go install` builds the binary |
+| Go | 1.26+ | `go install` builds the binary |
 | [Ollama](https://ollama.com) | latest | Must be running locally |
 | DuckDB CLI | optional | For manual DB inspection |
 
