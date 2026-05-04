@@ -1,5 +1,9 @@
 version: "2"
 
+formatters:
+  enable:
+    - gofmt
+
 linters:
   enable:
     - errcheck
@@ -10,7 +14,6 @@ linters:
     - unused
     - gosec
     - gocritic
-    - gofmt
     - misspell
     - noctx
     - bodyclose
