@@ -25,6 +25,9 @@ jobs:
       - name: Test
         run: go test -race -timeout 120s ./...
 
+      - name: Benchmark (smoke)
+        run: go test -bench=. -benchtime=1x -timeout 60s ./internal/store/...
+
       - name: Build
         run: |
           VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -50,3 +53,35 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, lint]
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_EXPERIMENTAL: "1"

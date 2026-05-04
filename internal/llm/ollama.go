@@ -48,6 +48,7 @@ type generateChunk struct {
 }
 
 // Generate streams the LLM response, writing tokens to out as they arrive.
+// Retries up to 3 times on HTTP 500 (model loading) with exponential backoff.
 func (c *Client) Generate(prompt string, out io.Writer) error {
 	body, _ := json.Marshal(generateRequest{
 		Model:  c.model,
@@ -55,12 +56,30 @@ func (c *Client) Generate(prompt string, out io.Writer) error {
 		Stream: true,
 	})
 
+	var lastErr error
+	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*attempt) * 2 * time.Second)
+		}
+		err := c.doGenerate(body, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+func (c *Client) doGenerate(body []byte, out io.Writer) error {
 	resp, err := c.client.Post(c.host+"/api/generate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusInternalServerError {
+		return fmt.Errorf("ollama generate: HTTP 500 (model loading?)")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("ollama generate: HTTP %d", resp.StatusCode)
 	}
