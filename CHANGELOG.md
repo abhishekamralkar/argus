@@ -11,6 +11,39 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.0] — 2026-05-03
+
+### Added
+
+**Correctness**
+- Alias-aware CVE deduplication — `GO-2024-x` and its `CVE-2024-x` alias no longer produce duplicate findings
+- Chunk deduplication on re-ingest — stale chunks are deleted before replacement, preventing unbounded growth
+- LLM retry with exponential backoff — HTTP 500 from Ollama (model loading) retried up to 3×
+
+**Features**
+- `argus status` subcommand — shows vuln count, chunk count, and last ingest time per ecosystem
+- `argus completion bash|zsh|fish|powershell` — shell completion scripts via Cobra
+- `.argusignore` file — suppress specific CVE IDs or entire packages (accepted risks / false positives)
+- `.argus.yaml` project config file — set `min_severity`, `workers`, `llm_model`, etc. per project
+- `--min-severity` flag on `scan` — hide findings below a threshold (e.g. skip LOW/MEDIUM noise)
+- `--fail-on` flag on `scan` — control which severity triggers exit code 1 (default: HIGH)
+- Color-coded terminal output — CRITICAL/HIGH/MEDIUM/LOW/OK rendered in distinct colors; respects `NO_COLOR`
+- `ingest_log` table — tracks last successful ingest timestamp per source
+
+**Distribution**
+- GoReleaser config — cross-platform builds (Linux/macOS/Windows, amd64/arm64), SHA-256 checksums, cosign signing
+- `Dockerfile` — multi-stage image with `/data` volume and `OLLAMA_HOST` env
+- `.github/dependabot.yml` — weekly Go module and GitHub Actions updates
+- `.golangci.yml` — project-wide lint rules (errcheck, gosec, gocritic, misspell)
+- CI release job — GoReleaser fires automatically on `v*` tag push
+
+**Tests**
+- `internal/store/store_test.go` — upsert, chunk CRUD, delete, status, alias roundtrip tests
+- `internal/store/store_test.go` — `BenchmarkUpsertChunkBatch` and `BenchmarkSearch`
+- `internal/ignore/ignore_test.go` — load, case-insensitive match, missing file tests
+
+---
+
 ## [0.1.0] — 2026-05-02
 
 ### Added
