@@ -89,7 +89,7 @@ func statusCmd(dbPath *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			rows, err := db.Status()
 			if err != nil {
@@ -112,9 +112,9 @@ func statusCmd(dbPath *string) *cobra.Command {
 				if r.ChunkCount == 0 {
 					chunks = "—"
 				}
-				t.Append([]string{r.Ecosystem, fmt.Sprintf("%d", r.VulnCount), chunks, last})
+				_ = t.Append([]string{r.Ecosystem, fmt.Sprintf("%d", r.VulnCount), chunks, last})
 			}
-			t.Render()
+			_ = t.Render()
 			fmt.Println()
 			return nil
 		},
@@ -146,7 +146,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			cc := chunkConfig{
 				enabled: !noChunk,
@@ -227,8 +227,8 @@ type chunkWork struct {
 
 // chunkResult is what workers send to the batch writer when chunking.
 type chunkResult struct {
-	vuln    *store.Vulnerability
-	item    store.ChunkItem
+	vuln *store.Vulnerability
+	item store.ChunkItem
 }
 
 func ingestSource(
@@ -284,7 +284,7 @@ func ingestSourceWhole(
 			if err := db.UpsertBatch(batch); err != nil {
 				errCount.Add(int64(len(batch)))
 			} else {
-				bar.Add(len(batch))
+				_ = bar.Add(len(batch))
 			}
 			batch = batch[:0]
 		}
@@ -361,7 +361,7 @@ func ingestSourceChunked(
 			if err := db.UpsertChunkBatch(batch); err != nil {
 				errCount.Add(int64(len(batch)))
 			} else {
-				bar.Add(len(batch))
+				_ = bar.Add(len(batch))
 			}
 			batch = batch[:0]
 		}
@@ -448,7 +448,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			ignoreList, err := ignore.Load(projectDir)
 			if err != nil {
@@ -612,7 +612,7 @@ func searchCmd(dbPath *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			embedder := embed.NewClient(embedModel)
 			vec, err := embedder.Embed(query)
@@ -659,7 +659,7 @@ func printSummaryTable(results []rag.Result) {
 		if sev == "" {
 			sev = "—"
 		}
-		t.Append([]string{
+		_ = t.Append([]string{
 			r.Dep.Name,
 			r.Dep.Version,
 			r.Dep.Ecosystem,
@@ -668,12 +668,12 @@ func printSummaryTable(results []rag.Result) {
 			col.Verdict(r.Verdict()),
 		})
 	}
-	t.Render()
+	_ = t.Render()
 }
 
-func truncatePath(s string, max int) string {
-	if len(s) <= max {
+func truncatePath(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	return "..." + s[len(s)-(max-3):]
+	return "..." + s[len(s)-(maxLen-3):]
 }

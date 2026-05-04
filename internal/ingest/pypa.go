@@ -57,7 +57,7 @@ func LoadPyPA(fn func(*store.Vulnerability) error) error {
 			continue
 		}
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			continue
 		}

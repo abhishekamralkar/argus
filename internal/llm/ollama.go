@@ -3,6 +3,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,11 +72,16 @@ func (c *Client) Generate(prompt string, out io.Writer) error {
 }
 
 func (c *Client) doGenerate(body []byte, out io.Writer) error {
-	resp, err := c.client.Post(c.host+"/api/generate", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.host+"/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusInternalServerError {
 		return fmt.Errorf("ollama generate: HTTP 500 (model loading?)")

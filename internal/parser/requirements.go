@@ -12,7 +12,7 @@ func ParseRequirements(path string) ([]Dependency, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var deps []Dependency
 	scanner := bufio.NewScanner(f)

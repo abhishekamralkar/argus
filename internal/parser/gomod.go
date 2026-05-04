@@ -12,7 +12,7 @@ func ParseGoMod(path string) ([]Dependency, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var deps []Dependency
 	inRequire := false

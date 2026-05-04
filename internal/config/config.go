@@ -9,14 +9,14 @@ import (
 // Config holds values from .argus.yaml. All fields are optional;
 // CLI flags override config file values.
 type Config struct {
-	DB          string `yaml:"db"`
-	EmbedModel  string `yaml:"embed_model"`
-	LLMModel    string `yaml:"llm_model"`
-	MinSeverity string `yaml:"min_severity"`
-	Workers     int    `yaml:"workers"`
-	Ecosystems  string `yaml:"ecosystems"`
-	ChunkSize   int    `yaml:"chunk_size"`
-	ChunkOverlap int   `yaml:"chunk_overlap"`
+	DB           string `yaml:"db"`
+	EmbedModel   string `yaml:"embed_model"`
+	LLMModel     string `yaml:"llm_model"`
+	MinSeverity  string `yaml:"min_severity"`
+	Workers      int    `yaml:"workers"`
+	Ecosystems   string `yaml:"ecosystems"`
+	ChunkSize    int    `yaml:"chunk_size"`
+	ChunkOverlap int    `yaml:"chunk_overlap"`
 }
 
 // Load reads .argus.yaml from the given directory (typically the project root).
