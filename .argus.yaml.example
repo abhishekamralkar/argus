@@ -1,0 +1,27 @@
+# .argus.yaml — project-level argus configuration
+# Place this file in your project root. CLI flags override these values.
+
+# DuckDB database path (default: ./vulns.db)
+# db: /var/lib/argus/vulns.db
+
+# Ollama embedding model (default: nomic-embed-text)
+# embed_model: nomic-embed-text
+
+# Ollama LLM model (default: gpt-oss:20b)
+# llm_model: gpt-oss:20b
+
+# Minimum severity to report in scan output (default: all)
+# Options: LOW, MEDIUM, HIGH, CRITICAL
+# min_severity: MEDIUM
+
+# Parallel workers for dependency analysis (default: 4)
+# workers: 8
+
+# Ecosystems to ingest (default: go,python,rust)
+# ecosystems: go,python,rust
+
+# Chunk size for document splitting during ingest (default: 512)
+# chunk_size: 512
+
+# Overlap between chunks (default: 64)
+# chunk_overlap: 64

@@ -12,7 +12,10 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
+	col "github.com/abhishekamralkar/argus/internal/color"
+	"github.com/abhishekamralkar/argus/internal/config"
 	"github.com/abhishekamralkar/argus/internal/embed"
+	"github.com/abhishekamralkar/argus/internal/ignore"
 	"github.com/abhishekamralkar/argus/internal/ingest"
 	"github.com/abhishekamralkar/argus/internal/llm"
 	"github.com/abhishekamralkar/argus/internal/output"
@@ -36,7 +39,9 @@ func main() {
 	root.AddCommand(ingestCmd(&dbPath))
 	root.AddCommand(scanCmd(&dbPath))
 	root.AddCommand(searchCmd(&dbPath))
+	root.AddCommand(statusCmd(&dbPath))
 	root.AddCommand(versionCmd())
+	root.AddCommand(completionCmd(root))
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -49,6 +54,69 @@ func versionCmd() *cobra.Command {
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("argus %s\n", Version)
+		},
+	}
+}
+
+func completionCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:       "completion [bash|zsh|fish|powershell]",
+		Short:     "Generate shell completion script",
+		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return root.GenBashCompletion(os.Stdout)
+			case "zsh":
+				return root.GenZshCompletion(os.Stdout)
+			case "fish":
+				return root.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return root.GenPowerShellCompletionWithDesc(os.Stdout)
+			}
+			return nil
+		},
+	}
+}
+
+func statusCmd(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show vulnerability database statistics",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer db.Close()
+
+			rows, err := db.Status()
+			if err != nil {
+				return fmt.Errorf("status: %w", err)
+			}
+			if len(rows) == 0 {
+				fmt.Println("Database is empty. Run: argus ingest")
+				return nil
+			}
+
+			fmt.Printf("\n%s\n\n", col.Bold("Vulnerability Database — %s", *dbPath))
+			t := tablewriter.NewWriter(os.Stdout)
+			t.Header("Ecosystem", "Vulnerabilities", "Chunks", "Last Ingest")
+			for _, r := range rows {
+				last := r.LastIngest
+				if last == "" {
+					last = "—"
+				}
+				chunks := fmt.Sprintf("%d", r.ChunkCount)
+				if r.ChunkCount == 0 {
+					chunks = "—"
+				}
+				t.Append([]string{r.Ecosystem, fmt.Sprintf("%d", r.VulnCount), chunks, last})
+			}
+			t.Render()
+			fmt.Println()
+			return nil
 		},
 	}
 }
@@ -245,6 +313,7 @@ func ingestSourceWhole(
 	if n := errCount.Load(); n > 0 {
 		fmt.Printf("  %s: %d entries skipped due to errors\n", name, n)
 	}
+	_ = db.TouchIngestLog(name)
 	return err
 }
 
@@ -312,6 +381,8 @@ func ingestSourceChunked(
 		if skipExisting && db.ExistsVuln(v.ID) {
 			return nil
 		}
+		// Delete stale chunks before re-ingesting so count doesn't grow unbounded.
+		_ = db.DeleteChunksForVuln(v.ID)
 		if err := db.UpsertVulnMeta(v); err != nil {
 			errCount.Add(1)
 			return nil
@@ -336,6 +407,7 @@ func ingestSourceChunked(
 	if n := errCount.Load(); n > 0 {
 		fmt.Printf("  %s: %d chunks skipped due to errors\n", name, n)
 	}
+	_ = db.TouchIngestLog(name)
 	return err
 }
 
@@ -347,6 +419,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var outputFmt string
 	var enhanceQuery bool
 	var workers int
+	var minSeverity string
+	var failOn string
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -355,15 +429,35 @@ func scanCmd(dbPath *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectDir := args[0]
 
+			// Load config file; CLI flags take precedence
+			cfg, _ := config.Load(projectDir)
+			if llmModel == "" {
+				llmModel = cfg.LLMModel
+			}
+			if embedModel == "" {
+				embedModel = cfg.EmbedModel
+			}
+			if minSeverity == "" {
+				minSeverity = cfg.MinSeverity
+			}
+			if workers == 4 && cfg.Workers > 0 {
+				workers = cfg.Workers
+			}
+
 			db, err := store.Open(*dbPath)
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
 			defer db.Close()
 
+			ignoreList, err := ignore.Load(projectDir)
+			if err != nil {
+				return fmt.Errorf("load ignore list: %w", err)
+			}
+
 			embedder := embed.NewClient(embedModel)
 			generator := llm.NewClient(llmModel)
-			engine := rag.NewEngine(db, embedder, generator, enhanceQuery)
+			engine := rag.NewEngine(db, embedder, generator, enhanceQuery, minSeverity, ignoreList)
 
 			deps, err := detectAndParse(projectDir)
 			if err != nil {
@@ -394,8 +488,15 @@ func scanCmd(dbPath *string) *cobra.Command {
 				printSummaryTable(results)
 			}
 
+			threshold := failOn
+			if threshold == "" {
+				threshold = "HIGH"
+			}
 			for _, r := range results {
-				if r.Verdict() == "CRITICAL" || r.Verdict() == "HIGH" {
+				v := r.Verdict()
+				if v == "CRITICAL" || v == threshold ||
+					(threshold == "MEDIUM" && (v == "HIGH" || v == "CRITICAL")) ||
+					(threshold == "LOW" && v != "OK" && v != "REVIEW") {
 					os.Exit(1)
 				}
 			}
@@ -407,6 +508,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, or sarif")
 	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
+	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL")
+	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
 	return cmd
 }
 
@@ -547,9 +650,7 @@ func searchCmd(dbPath *string) *cobra.Command {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func printSummaryTable(results []rag.Result) {
-	fmt.Printf("\n╔══════════════════════════════════════╗\n")
-	fmt.Printf("║           SCAN SUMMARY               ║\n")
-	fmt.Printf("╚══════════════════════════════════════╝\n\n")
+	fmt.Printf("\n%s\n\n", col.Bold("SCAN SUMMARY"))
 
 	t := tablewriter.NewWriter(os.Stdout)
 	t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Verdict")
@@ -563,8 +664,8 @@ func printSummaryTable(results []rag.Result) {
 			r.Dep.Version,
 			r.Dep.Ecosystem,
 			fmt.Sprintf("%d", r.RetrievedCount),
-			sev,
-			r.Verdict(),
+			col.Severity(sev),
+			col.Verdict(r.Verdict()),
 		})
 	}
 	t.Render()
