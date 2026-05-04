@@ -1,5 +1,8 @@
 version: 2
 
+partial:
+  by: target
+
 before:
   hooks:
     - go mod tidy
@@ -10,6 +13,10 @@ builds:
     binary: argus
     env:
       - CGO_ENABLED=1
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "arm64") }}CC=aarch64-linux-gnu-gcc{{- end }}
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "arm64") }}CXX=aarch64-linux-gnu-g++{{- end }}
     ldflags:
       - -s -w -X main.Version={{.Version}}
     goos:
@@ -35,7 +42,6 @@ archives:
     files:
       - LICENSE
       - README.md
-      - CHANGELOG.md
 
 checksum:
   name_template: "argus_{{ .Version }}_checksums.txt"
