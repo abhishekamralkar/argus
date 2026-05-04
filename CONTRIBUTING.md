@@ -8,7 +8,7 @@ Thank you for your interest in contributing!
 git clone https://github.com/abhishekamralkar/argus.git
 cd argus
 
-# Install Go 1.21+, then build
+# Install Go 1.26+, then build
 make build
 ./argus version
 

@@ -8,22 +8,42 @@ import (
 
 	"github.com/olekukonko/tablewriter"
 
+	col "github.com/abhishekamralkar/argus/internal/color"
 	"github.com/abhishekamralkar/argus/internal/embed"
+	"github.com/abhishekamralkar/argus/internal/ignore"
 	"github.com/abhishekamralkar/argus/internal/llm"
 	"github.com/abhishekamralkar/argus/internal/parser"
 	"github.com/abhishekamralkar/argus/internal/store"
 	"github.com/abhishekamralkar/argus/internal/version"
 )
 
+var severityOrder = map[string]int{"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
 type Engine struct {
 	db           *store.DB
 	embedder     *embed.Client
 	generator    *llm.Client
 	enhanceQuery bool
+	minSeverity  string
+	ignoreList   *ignore.List
 }
 
-func NewEngine(db *store.DB, embedder *embed.Client, generator *llm.Client, enhanceQuery bool) *Engine {
-	return &Engine{db: db, embedder: embedder, generator: generator, enhanceQuery: enhanceQuery}
+func NewEngine(
+	db *store.DB,
+	embedder *embed.Client,
+	generator *llm.Client,
+	enhanceQuery bool,
+	minSeverity string,
+	ignoreList *ignore.List,
+) *Engine {
+	return &Engine{
+		db:           db,
+		embedder:     embedder,
+		generator:    generator,
+		enhanceQuery: enhanceQuery,
+		minSeverity:  minSeverity,
+		ignoreList:   ignoreList,
+	}
 }
 
 // Result summarises the outcome of analysing one dependency.
@@ -88,17 +108,61 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 		return result, fmt.Errorf("vector search: %w", err)
 	}
 
-	// Filter: package name match + version-aware (only flag if scanned version is still affected).
+	// Filter: package name match + version-aware + ignore list + min-severity + alias dedup.
 	nameLower := strings.ToLower(dep.Name)
+	seenID := make(map[string]bool) // dedup by canonical ID and all aliases
 	var relevant []store.SearchResult
 	for _, r := range hits {
+		// Skip if package is on the ignore list
+		if e.ignoreList != nil && e.ignoreList.Package(r.Package) {
+			continue
+		}
+		// Skip if this specific vuln ID (or any alias) is ignored
+		if e.ignoreList != nil {
+			if e.ignoreList.VulnID(r.ID) {
+				continue
+			}
+			ignored := false
+			for _, alias := range r.Aliases {
+				if e.ignoreList.VulnID(alias) {
+					ignored = true
+					break
+				}
+			}
+			if ignored {
+				continue
+			}
+		}
+		// Alias-aware deduplication: skip if we already have this vuln under another ID
+		canonKey := r.ID
+		for _, alias := range r.Aliases {
+			if seenID[alias] {
+				canonKey = ""
+				break
+			}
+		}
+		if canonKey == "" || seenID[r.ID] {
+			continue
+		}
+		seenID[r.ID] = true
+		for _, alias := range r.Aliases {
+			seenID[alias] = true
+		}
+		// Package name match
 		nameMatch := strings.Contains(strings.ToLower(r.Package), nameLower) ||
 			strings.Contains(strings.ToLower(r.Content), nameLower)
 		if !nameMatch {
 			continue
 		}
+		// Version-aware: skip if already fixed
 		if !version.AffectsVersion(dep.Version, r.FixedIn) {
-			continue // dep is already at or past the fixed version
+			continue
+		}
+		// Min-severity filter
+		if e.minSeverity != "" && r.Severity != "" {
+			if severityOrder[r.Severity] < severityOrder[e.minSeverity] {
+				continue
+			}
 		}
 		relevant = append(relevant, r)
 	}
@@ -144,7 +208,7 @@ func printCVETable(out io.Writer, results []store.SearchResult) {
 		if fix == "" {
 			fix = "—"
 		}
-		t.Append([]string{r.ID, r.Package, sev, fix, fmt.Sprintf("%.3f", r.Score)})
+		t.Append([]string{r.ID, r.Package, col.Severity(sev), fix, fmt.Sprintf("%.3f", r.Score)})
 	}
 	t.Render()
 }
@@ -176,10 +240,9 @@ func buildPrompt(dep parser.Dependency, results []store.SearchResult) string {
 }
 
 func topSeverity(results []store.SearchResult) string {
-	order := map[string]int{"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
 	top := ""
 	for _, r := range results {
-		if order[r.Severity] > order[top] {
+		if severityOrder[r.Severity] > severityOrder[top] {
 			top = r.Severity
 		}
 	}
