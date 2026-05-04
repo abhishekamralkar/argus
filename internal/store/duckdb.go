@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -20,7 +21,7 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return &DB{db: db}, nil
@@ -32,7 +33,7 @@ func (s *DB) Close() error {
 
 func migrate(db *sql.DB) error {
 	// Create tables (no-op if they already exist with original schema)
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS vulnerabilities (
 			id        VARCHAR PRIMARY KEY,
 			ecosystem VARCHAR NOT NULL,
@@ -65,7 +66,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS aliases VARCHAR`,
 	}
 	for _, m := range migrations {
-		if _, err := db.Exec(m); err != nil {
+		if _, err := db.ExecContext(context.Background(), m); err != nil {
 			return fmt.Errorf("migration %q: %w", m, err)
 		}
 	}
@@ -75,7 +76,7 @@ func migrate(db *sql.DB) error {
 // UpsertVulnMeta stores only the vulnerability metadata (no embedding).
 func (s *DB) UpsertVulnMeta(v *Vulnerability) error {
 	aliases := strings.Join(v.Aliases, ",")
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(context.Background(), `
 		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -89,13 +90,13 @@ func (s *DB) UpsertVulnMeta(v *Vulnerability) error {
 
 // DeleteChunksForVuln removes all chunks for a vulnerability ID before re-ingesting.
 func (s *DB) DeleteChunksForVuln(vulnID string) error {
-	_, err := s.db.Exec(`DELETE FROM vulnerability_chunks WHERE vuln_id = ?`, vulnID)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM vulnerability_chunks WHERE vuln_id = ?`, vulnID)
 	return err
 }
 
 // TouchIngestLog records a successful ingest run for the given source name.
 func (s *DB) TouchIngestLog(source string) error {
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(context.Background(), `
 		INSERT INTO ingest_log (source, last_run_at) VALUES (?, NOW())
 		ON CONFLICT (source) DO UPDATE SET last_run_at = excluded.last_run_at
 	`, source)
@@ -112,7 +113,7 @@ type StatusReport struct {
 
 // Status returns per-ecosystem statistics.
 func (s *DB) Status() ([]StatusReport, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(context.Background(), `
 		SELECT v.ecosystem,
 		       COUNT(DISTINCT v.id)      AS vuln_count,
 		       COUNT(c.chunk_id)         AS chunk_count
@@ -124,7 +125,7 @@ func (s *DB) Status() ([]StatusReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []StatusReport
 	for rows.Next() {
@@ -139,11 +140,11 @@ func (s *DB) Status() ([]StatusReport, error) {
 	}
 
 	// Attach last ingest times
-	logRows, err := s.db.Query(`SELECT source, last_run_at FROM ingest_log`)
+	logRows, err := s.db.QueryContext(context.Background(), `SELECT source, last_run_at FROM ingest_log`)
 	if err != nil {
 		return out, nil // ingest_log may be empty
 	}
-	defer logRows.Close()
+	defer func() { _ = logRows.Close() }()
 	logMap := make(map[string]string)
 	for logRows.Next() {
 		var src, ts string
@@ -171,14 +172,14 @@ func (s *DB) UpsertChunkBatch(chunks []ChunkItem) error {
 	if len(chunks) == 0 {
 		return nil
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, c := range chunks {
-		_, err := tx.Exec(fmt.Sprintf(`
+		_, err := tx.ExecContext(context.Background(), fmt.Sprintf(`
 			INSERT INTO vulnerability_chunks (chunk_id, vuln_id, content, embedding)
 			VALUES (?, ?, ?, %s::FLOAT[768])
 			ON CONFLICT (chunk_id) DO UPDATE SET
@@ -197,7 +198,7 @@ func (s *DB) UpsertChunkBatch(chunks []ChunkItem) error {
 // ExistsVuln returns true if any chunks have been stored for this vulnerability ID.
 func (s *DB) ExistsVuln(id string) bool {
 	var n int
-	s.db.QueryRow(`SELECT 1 FROM vulnerability_chunks WHERE vuln_id = ? LIMIT 1`, id).Scan(&n)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT 1 FROM vulnerability_chunks WHERE vuln_id = ? LIMIT 1`, id).Scan(&n)
 	return n == 1
 }
 
@@ -206,7 +207,7 @@ func (s *DB) ExistsVuln(id string) bool {
 func (s *DB) SearchBest(ecosystem string, embedding []float32, limit int) ([]SearchResult, error) {
 	// Check whether the chunks table has any data for this ecosystem.
 	var chunkCount int64
-	s.db.QueryRow(`
+	_ = s.db.QueryRowContext(context.Background(), `
 		SELECT COUNT(*) FROM vulnerability_chunks c
 		JOIN vulnerabilities v ON c.vuln_id = v.id
 		WHERE v.ecosystem = ? LIMIT 1
@@ -222,7 +223,7 @@ func (s *DB) SearchBest(ecosystem string, embedding []float32, limit int) ([]Sea
 func (s *DB) searchChunks(ecosystem string, embedding []float32, limit int) ([]SearchResult, error) {
 	arr := floatSliceToArray(embedding)
 	// Retrieve more candidates than limit to allow deduplication.
-	rows, err := s.db.Query(fmt.Sprintf(`
+	rows, err := s.db.QueryContext(context.Background(), fmt.Sprintf(`
 		SELECT c.vuln_id, v.ecosystem, v.package, v.severity, v.fixed_in, COALESCE(v.aliases,''), c.content,
 		       array_cosine_similarity(c.embedding, %s::FLOAT[768]) AS score
 		FROM vulnerability_chunks c
@@ -235,7 +236,7 @@ func (s *DB) searchChunks(ecosystem string, embedding []float32, limit int) ([]S
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	seen := make(map[string]bool)
 	var results []SearchResult
@@ -260,7 +261,7 @@ func (s *DB) searchChunks(ecosystem string, embedding []float32, limit int) ([]S
 
 func (s *DB) CountChunks(ecosystem string) (int64, error) {
 	var n int64
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(context.Background(), `
 		SELECT COUNT(*) FROM vulnerability_chunks c
 		JOIN vulnerabilities v ON c.vuln_id = v.id
 		WHERE v.ecosystem = ?
@@ -279,7 +280,7 @@ func (s *DB) Upsert(v *Vulnerability, embedding []float32) error {
 	if len(content) > 4000 {
 		content = content[:4000]
 	}
-	_, err := s.db.Exec(fmt.Sprintf(`
+	_, err := s.db.ExecContext(context.Background(), fmt.Sprintf(`
 		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, content, embedding)
 		VALUES (?, ?, ?, ?, ?, ?, %s::FLOAT[768])
 		ON CONFLICT (id) DO UPDATE SET
@@ -305,7 +306,7 @@ type SearchResult struct {
 }
 
 func (s *DB) Search(ecosystem string, embedding []float32, limit int) ([]SearchResult, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(context.Background(), `
 		SELECT id, ecosystem, package, severity, fixed_in, COALESCE(aliases,''), content,
 		       array_cosine_similarity(embedding, ?::FLOAT[768]) AS score
 		FROM vulnerabilities
@@ -317,7 +318,7 @@ func (s *DB) Search(ecosystem string, embedding []float32, limit int) ([]SearchR
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []SearchResult
 	for rows.Next() {
@@ -348,13 +349,13 @@ func splitAliases(s string) []string {
 
 func (s *DB) Count(ecosystem string) (int64, error) {
 	var n int64
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM vulnerabilities WHERE ecosystem = ?`, ecosystem).Scan(&n)
+	err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM vulnerabilities WHERE ecosystem = ?`, ecosystem).Scan(&n)
 	return n, err
 }
 
 func (s *DB) Exists(id string) bool {
 	var n int
-	s.db.QueryRow(`SELECT 1 FROM vulnerabilities WHERE id = ? LIMIT 1`, id).Scan(&n)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT 1 FROM vulnerabilities WHERE id = ? LIMIT 1`, id).Scan(&n)
 	return n == 1
 }
 
@@ -368,11 +369,11 @@ func (s *DB) UpsertBatch(batch []EmbeddedVuln) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, item := range batch {
 		v := item.Vuln
@@ -384,7 +385,7 @@ func (s *DB) UpsertBatch(batch []EmbeddedVuln) error {
 			content = content[:4000]
 		}
 		aliases := strings.Join(v.Aliases, ",")
-		_, err := tx.Exec(fmt.Sprintf(`
+		_, err := tx.ExecContext(context.Background(), fmt.Sprintf(`
 			INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content, embedding)
 			VALUES (?, ?, ?, ?, ?, ?, ?, %s::FLOAT[768])
 			ON CONFLICT (id) DO UPDATE SET

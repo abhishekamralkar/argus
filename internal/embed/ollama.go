@@ -2,6 +2,7 @@ package embed
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -62,11 +63,16 @@ func (c *Client) Embed(text string) ([]float32, error) {
 }
 
 func (c *Client) doEmbed(body []byte) ([]float32, error) {
-	resp, err := c.client.Post(c.host+"/api/embeddings", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.host+"/api/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ollama embed: HTTP %d", resp.StatusCode)

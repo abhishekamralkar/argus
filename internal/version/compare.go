@@ -43,11 +43,11 @@ func normalize(v string) string {
 func semverLess(a, b string) bool {
 	as := splitParts(a)
 	bs := splitParts(b)
-	max := len(as)
-	if len(bs) > max {
-		max = len(bs)
+	maxLen := len(as)
+	if len(bs) > maxLen {
+		maxLen = len(bs)
 	}
-	for i := range max {
+	for i := range maxLen {
 		ai := partInt(as, i)
 		bi := partInt(bs, i)
 		if ai < bi {

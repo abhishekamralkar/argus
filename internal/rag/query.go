@@ -172,7 +172,7 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 	result.Findings = relevant
 
 	if len(relevant) == 0 {
-		fmt.Fprintf(out, "  No matching vulnerabilities found in database.\n")
+		_, _ = fmt.Fprintf(out, "  No matching vulnerabilities found in database.\n")
 		return result, nil
 	}
 
@@ -180,23 +180,23 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 	printCVETable(out, relevant)
 
 	// Stream LLM analysis.
-	fmt.Fprintf(out, "\n  Analyzing with %s (streaming)...\n", e.generator.Model())
-	fmt.Fprintln(out, strings.Repeat("─", 60))
+	_, _ = fmt.Fprintf(out, "\n  Analyzing with %s (streaming)...\n", e.generator.Model())
+	_, _ = fmt.Fprintln(out, strings.Repeat("─", 60))
 
 	var llmBuf strings.Builder
 	bw := bufio.NewWriter(io.MultiWriter(out, &llmBuf))
 	err = e.generator.Generate(buildPrompt(dep, relevant), writerFunc(func(p []byte) (int, error) {
 		n, err := bw.Write(p)
-		bw.Flush()
+		_ = bw.Flush()
 		return n, err
 	}))
 	result.LLMAnalysis = llmBuf.String()
-	fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out)
 	return result, err
 }
 
 func printCVETable(out io.Writer, results []store.SearchResult) {
-	fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out)
 	t := tablewriter.NewWriter(out)
 	t.Header("ID", "Package", "Severity", "Fixed In", "Score")
 	for _, r := range results {
@@ -208,9 +208,9 @@ func printCVETable(out io.Writer, results []store.SearchResult) {
 		if fix == "" {
 			fix = "—"
 		}
-		t.Append([]string{r.ID, r.Package, col.Severity(sev), fix, fmt.Sprintf("%.3f", r.Score)})
+		_ = t.Append([]string{r.ID, r.Package, col.Severity(sev), fix, fmt.Sprintf("%.3f", r.Score)})
 	}
-	t.Render()
+	_ = t.Render()
 }
 
 func buildPrompt(dep parser.Dependency, results []store.SearchResult) string {
@@ -249,15 +249,14 @@ func topSeverity(results []store.SearchResult) string {
 	return top
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxLen] + "..."
 }
 
 // writerFunc adapts a func to io.Writer.
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
-

@@ -12,7 +12,7 @@ const (
 // to hard character splits, so each chunk remains semantically coherent.
 func ChunkText(text string, size, overlap int) []string {
 	text = strings.TrimSpace(text)
-	if len(text) == 0 {
+	if text == "" {
 		return nil
 	}
 	if len(text) <= size {

@@ -18,22 +18,22 @@ type JSONReport struct {
 }
 
 type JSONResult struct {
-	Package    string      `json:"package"`
-	Version    string      `json:"version"`
-	Ecosystem  string      `json:"ecosystem"`
-	Verdict    string      `json:"verdict"`
-	Severity   string      `json:"severity,omitempty"`
-	CVECount   int         `json:"cve_count"`
-	Findings   []JSONFinding `json:"findings,omitempty"`
+	Package   string        `json:"package"`
+	Version   string        `json:"version"`
+	Ecosystem string        `json:"ecosystem"`
+	Verdict   string        `json:"verdict"`
+	Severity  string        `json:"severity,omitempty"`
+	CVECount  int           `json:"cve_count"`
+	Findings  []JSONFinding `json:"findings,omitempty"`
 }
 
 type JSONFinding struct {
-	ID      string  `json:"id"`
-	Package string  `json:"package"`
-	Severity string `json:"severity,omitempty"`
-	FixedIn string  `json:"fixed_in,omitempty"`
-	Score   float64 `json:"score"`
-	Summary string  `json:"summary,omitempty"`
+	ID       string  `json:"id"`
+	Package  string  `json:"package"`
+	Severity string  `json:"severity,omitempty"`
+	FixedIn  string  `json:"fixed_in,omitempty"`
+	Score    float64 `json:"score"`
+	Summary  string  `json:"summary,omitempty"`
 }
 
 func WriteJSON(w io.Writer, results []rag.Result) error {
@@ -76,7 +76,7 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifTool    `json:"tool"`
+	Tool    sarifTool     `json:"tool"`
 	Results []sarifResult `json:"results"`
 }
 
@@ -92,10 +92,10 @@ type sarifDriver struct {
 }
 
 type sarifRule struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	ShortDescription sarifMessage    `json:"shortDescription"`
-	Properties       sarifRuleProps  `json:"properties"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	ShortDescription sarifMessage   `json:"shortDescription"`
+	Properties       sarifRuleProps `json:"properties"`
 }
 
 type sarifRuleProps struct {
@@ -103,9 +103,9 @@ type sarifRuleProps struct {
 }
 
 type sarifResult struct {
-	RuleID  string         `json:"ruleId"`
-	Level   string         `json:"level"`
-	Message sarifMessage   `json:"message"`
+	RuleID    string          `json:"ruleId"`
+	Level     string          `json:"level"`
+	Message   sarifMessage    `json:"message"`
 	Locations []sarifLocation `json:"locations"`
 }
 
@@ -235,11 +235,11 @@ func emptyOr(s, fallback string) string {
 	return s
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxLen] + "..."
 }
 
 // Ensure store import is used (findings reference store.SearchResult indirectly via rag.Result)
