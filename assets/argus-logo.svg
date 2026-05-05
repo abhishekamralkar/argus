@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Argus vulnerability scanner logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#081b2c"/>
+      <stop offset="100%" stop-color="#0e3a67"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3bd0c2"/>
+      <stop offset="100%" stop-color="#6ad1ff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" rx="40" fill="url(#bg)"/>
+  <rect x="80" y="80" width="1040" height="470" rx="36" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+  <g filter="url(#glow)">
+    <path d="M400 220 C380 200 340 180 300 230 C260 280 280 340 350 360 C420 380 520 360 560 300 C600 240 530 220 500 250 C470 280 440 290 410 280 C380 270 420 260 400 240" fill="none" stroke="url(#accent)" stroke-width="18" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(330 180)">
+    <path d="M220 0 C330 0 420 90 420 200 C420 310 330 400 220 400 C110 400 20 310 20 200 C20 90 110 0 220 0 Z" fill="#0d2d56" stroke="#3bd0c2" stroke-width="12"/>
+    <path d="M220 70 C290 70 345 125 345 195 C345 265 290 320 220 320 C150 320 95 265 95 195 C95 125 150 70 220 70 Z" fill="#0a203f"/>
+    <path d="M220 120 C255 120 285 150 285 185 C285 220 255 250 220 250 C185 250 155 220 155 185 C155 150 185 120 220 120 Z" fill="#6ad1ff"/>
+    <circle cx="220" cy="185" r="40" fill="#0e3a67"/>
+    <circle cx="220" cy="185" r="14" fill="#ffffff" opacity="0.9"/>
+    <path d="M190 260 L250 340" stroke="#6ad1ff" stroke-width="12" stroke-linecap="round" opacity="0.85"/>
+    <path d="M240 290 L310 320" stroke="#6ad1ff" stroke-width="10" stroke-linecap="round" opacity="0.75"/>
+  </g>
+  <g fill="#ffffff" opacity="0.4">
+    <circle cx="890" cy="220" r="12"/>
+    <circle cx="960" cy="180" r="10"/>
+    <circle cx="820" cy="320" r="14"/>
+    <circle cx="880" cy="390" r="10"/>
+    <circle cx="980" cy="315" r="8"/>
+  </g>
+  <g stroke="#6ad1ff" stroke-width="3" fill="none" opacity="0.65">
+    <path d="M850 220 L930 240 L980 190" stroke-linecap="round"/>
+    <path d="M780 330 L840 280 L920 300" stroke-linecap="round"/>
+    <path d="M760 170 L810 210 L860 170" stroke-linecap="round"/>
+  </g>
+  <text x="120" y="170" fill="#ffffff" font-family="Inter, sans-serif" font-size="64" font-weight="700">argus</text>
+  <text x="120" y="230" fill="#a8d7ff" font-family="Inter, sans-serif" font-size="28" letter-spacing="0.08em">LOCAL AI SECURITY FOR GO · PYTHON · RUST</text>
+  <text x="120" y="320" fill="#d1e8ff" font-family="Inter, sans-serif" font-size="22" letter-spacing="0.02em" opacity="0.85">Semantic vulnerability scanning with Ollama, DuckDB, and version-aware CVE filtering.</text>
+  <text x="120" y="360" fill="#d1e8ff" font-family="Inter, sans-serif" font-size="22" letter-spacing="0.02em" opacity="0.85">Deployable in CI, export results to JSON or SARIF, and keep your code on-prem.</text>
+</svg>
