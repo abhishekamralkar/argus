@@ -1,5 +1,6 @@
 # Build output
 /argus
+/cmd/argus/vulnscan
 /dist/
 
 # Claude Code
