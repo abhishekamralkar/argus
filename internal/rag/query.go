@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
@@ -53,9 +54,13 @@ type Result struct {
 	TopSeverity    string
 	Findings       []store.SearchResult
 	LLMAnalysis    string
+	Err            error
 }
 
 func (r Result) Verdict() string {
+	if r.Err != nil {
+		return "ERROR"
+	}
 	if r.RetrievedCount == 0 {
 		return "OK"
 	}
@@ -100,12 +105,14 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 	}
 	vec, err := e.embedder.Embed(query)
 	if err != nil {
-		return result, fmt.Errorf("embed query: %w", err)
+		result.Err = fmt.Errorf("embed query: %w", err)
+		return result, nil
 	}
 
 	hits, err := e.db.SearchBest(dep.Ecosystem, vec, 10)
 	if err != nil {
-		return result, fmt.Errorf("vector search: %w", err)
+		result.Err = fmt.Errorf("vector search: %w", err)
+		return result, nil
 	}
 
 	// Filter: package name match + version-aware + ignore list + min-severity + alias dedup.
@@ -122,14 +129,7 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 			if e.ignoreList.VulnID(r.ID) {
 				continue
 			}
-			ignored := false
-			for _, alias := range r.Aliases {
-				if e.ignoreList.VulnID(alias) {
-					ignored = true
-					break
-				}
-			}
-			if ignored {
+			if slices.ContainsFunc(r.Aliases, e.ignoreList.VulnID) {
 				continue
 			}
 		}
@@ -191,8 +191,11 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 		return n, err
 	}))
 	result.LLMAnalysis = llmBuf.String()
+	if err != nil {
+		result.Err = err
+	}
 	_, _ = fmt.Fprintln(out)
-	return result, err
+	return result, nil
 }
 
 func printCVETable(out io.Writer, results []store.SearchResult) {

@@ -33,7 +33,11 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 	}
 
 	// No chunks yet
-	if db.ExistsVuln(v.ID) {
+	exists, err := db.ExistsVuln(v.ID)
+	if err != nil {
+		t.Fatalf("ExistsVuln: %v", err)
+	}
+	if exists {
 		t.Error("ExistsVuln should be false before any chunks are inserted")
 	}
 
@@ -47,7 +51,11 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 		t.Fatalf("UpsertChunkBatch: %v", err)
 	}
 
-	if !db.ExistsVuln(v.ID) {
+	exists, err = db.ExistsVuln(v.ID)
+	if err != nil {
+		t.Fatalf("ExistsVuln after insert: %v", err)
+	}
+	if !exists {
 		t.Error("ExistsVuln should be true after chunk insert")
 	}
 }

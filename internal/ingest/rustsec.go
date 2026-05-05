@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"io"
 	"strings"
 	"time"
 
@@ -27,63 +26,47 @@ type rustSecAdvisory struct {
 
 // LoadRustSec downloads the RustSec advisory DB and calls fn per advisory.
 func LoadRustSec(fn func(*store.Vulnerability) error) error {
-	zr, err := downloadZip("https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip")
-	if err != nil {
-		return err
-	}
+	return loadFromZip(
+		"https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip",
+		func(name string) bool {
+			if !strings.HasSuffix(name, ".toml") {
+				return false
+			}
+			// Only crate advisories: advisory-db-main/crates/<name>/<id>.toml
+			parts := strings.Split(name, "/")
+			return len(parts) >= 4 && parts[1] == "crates"
+		},
+		func(name string, data []byte) error {
+			var adv rustSecAdvisory
+			if _, err := toml.Decode(string(data), &adv); err != nil {
+				return nil
+			}
+			a := adv.Advisory
+			if a.ID == "" || a.Package == "" {
+				return nil
+			}
 
-	for _, f := range zr.File {
-		if !strings.HasSuffix(f.Name, ".toml") {
-			continue
-		}
-		// Only crate advisories: advisory-db-main/crates/<name>/<id>.toml
-		parts := strings.Split(f.Name, "/")
-		if len(parts) < 4 || parts[1] != "crates" {
-			continue
-		}
+			fixedIn := ""
+			if len(a.PatchedVers) > 0 {
+				fixedIn = strings.TrimPrefix(a.PatchedVers[0], ">=")
+			}
 
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			continue
-		}
+			published, _ := time.Parse("2006-01-02", a.Date)
 
-		var adv rustSecAdvisory
-		if _, err := toml.Decode(string(data), &adv); err != nil {
-			continue
-		}
-		a := adv.Advisory
-		if a.ID == "" || a.Package == "" {
-			continue
-		}
-
-		fixedIn := ""
-		if len(a.PatchedVers) > 0 {
-			fixedIn = strings.TrimPrefix(a.PatchedVers[0], ">=")
-		}
-
-		published, _ := time.Parse("2006-01-02", a.Date)
-
-		v := &store.Vulnerability{
-			ID:        a.ID,
-			Ecosystem: "rust",
-			Package:   a.Package,
-			Aliases:   a.Aliases,
-			Summary:   a.Title,
-			Details:   a.Description,
-			Severity:  normalizeSeverity(a.Severity),
-			FixedIn:   strings.TrimSpace(fixedIn),
-			Published: published,
-		}
-		if err := fn(v); err != nil {
-			return err
-		}
-	}
-	return nil
+			v := &store.Vulnerability{
+				ID:        a.ID,
+				Ecosystem: "rust",
+				Package:   a.Package,
+				Aliases:   a.Aliases,
+				Summary:   a.Title,
+				Details:   a.Description,
+				Severity:  normalizeSeverity(a.Severity),
+				FixedIn:   strings.TrimSpace(fixedIn),
+				Published: published,
+			}
+			return fn(v)
+		},
+	)
 }
 
 func normalizeSeverity(s string) string {

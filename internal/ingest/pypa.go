@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"io"
 	"strings"
 	"time"
 
@@ -37,75 +36,59 @@ type pypaAdvisory struct {
 
 // LoadPyPA downloads the PyPA advisory DB and calls fn per advisory.
 func LoadPyPA(fn func(*store.Vulnerability) error) error {
-	zr, err := downloadZip("https://github.com/pypa/advisory-database/archive/refs/heads/main.zip")
-	if err != nil {
-		return err
-	}
+	return loadFromZip(
+		"https://github.com/pypa/advisory-database/archive/refs/heads/main.zip",
+		func(name string) bool {
+			if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+				return false
+			}
+			// advisory-database-main/advisories/pypi/<pkg>/<id>.yaml
+			parts := strings.Split(name, "/")
+			return len(parts) >= 5 && parts[1] == "advisories"
+		},
+		func(name string, data []byte) error {
+			var adv pypaAdvisory
+			if err := yaml.Unmarshal(data, &adv); err != nil {
+				return nil
+			}
+			if adv.ID == "" || adv.Package.Name == "" {
+				return nil
+			}
 
-	for _, f := range zr.File {
-		if !strings.HasSuffix(f.Name, ".yaml") && !strings.HasSuffix(f.Name, ".yml") {
-			continue
-		}
-		// advisory-database-main/advisories/pypi/<pkg>/<id>.yaml
-		parts := strings.Split(f.Name, "/")
-		if len(parts) < 5 || parts[1] != "advisories" {
-			continue
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			continue
-		}
-
-		var adv pypaAdvisory
-		if err := yaml.Unmarshal(data, &adv); err != nil {
-			continue
-		}
-		if adv.ID == "" || adv.Package.Name == "" {
-			continue
-		}
-
-		fixedIn := ""
-		for _, a := range adv.Affected {
-			for _, rng := range a.Ranges {
-				for _, ev := range rng.Events {
-					if ev.Fixed != "" {
-						fixedIn = ev.Fixed
-						break
+			fixedIn := ""
+			for _, a := range adv.Affected {
+				for _, rng := range a.Ranges {
+					for _, ev := range rng.Events {
+						if ev.Fixed != "" {
+							fixedIn = ev.Fixed
+							break
+						}
 					}
 				}
 			}
-		}
 
-		severity := ""
-		for _, s := range adv.Severity {
-			if strings.Contains(strings.ToUpper(s.Score), "CRITICAL") {
-				severity = "CRITICAL"
-				break
-			} else if strings.Contains(strings.ToUpper(s.Score), "HIGH") {
-				severity = "HIGH"
+			severity := ""
+			for _, s := range adv.Severity {
+				if strings.Contains(strings.ToUpper(s.Score), "CRITICAL") {
+					severity = "CRITICAL"
+					break
+				} else if strings.Contains(strings.ToUpper(s.Score), "HIGH") {
+					severity = "HIGH"
+				}
 			}
-		}
 
-		v := &store.Vulnerability{
-			ID:        adv.ID,
-			Ecosystem: "python",
-			Package:   adv.Package.Name,
-			Aliases:   adv.Aliases,
-			Summary:   adv.Summary,
-			Details:   adv.Details,
-			Severity:  severity,
-			FixedIn:   fixedIn,
-			Published: adv.Published,
-		}
-		if err := fn(v); err != nil {
-			return err
-		}
-	}
-	return nil
+			v := &store.Vulnerability{
+				ID:        adv.ID,
+				Ecosystem: "python",
+				Package:   adv.Package.Name,
+				Aliases:   adv.Aliases,
+				Summary:   adv.Summary,
+				Details:   adv.Details,
+				Severity:  severity,
+				FixedIn:   fixedIn,
+				Published: adv.Published,
+			}
+			return fn(v)
+		},
+	)
 }
