@@ -34,6 +34,8 @@ func Verdict(s string) string {
 		return s
 	}
 	switch s {
+	case "ERROR":
+		return color.New(color.FgRed, color.Bold).Sprint(s)
 	case "CRITICAL":
 		return color.New(color.FgRed, color.Bold).Sprint(s)
 	case "HIGH":

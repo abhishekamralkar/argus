@@ -3,7 +3,6 @@ package ingest
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -75,6 +74,7 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 	for _, s := range r.Severity {
 		if strings.HasPrefix(s.Score, "CRITICAL") {
 			severity = "CRITICAL"
+			break
 		} else if strings.HasPrefix(s.Score, "HIGH") && severity != "CRITICAL" {
 			severity = "HIGH"
 		} else if strings.HasPrefix(s.Score, "MEDIUM") && severity == "" {
@@ -109,36 +109,21 @@ func LoadOSV(osvEco string, fn func(*store.Vulnerability) error) error {
 		return fmt.Errorf("no URL for OSV ecosystem: %s", osvEco)
 	}
 
-	zr, err := downloadZip(url)
-	if err != nil {
-		return err
-	}
-
-	for _, f := range zr.File {
-		if !strings.HasSuffix(f.Name, ".json") {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(rc)
-		_ = rc.Close()
-		if err != nil {
-			continue
-		}
-
-		var rec osvRecord
-		if err := json.Unmarshal(data, &rec); err != nil {
-			continue
-		}
-		v := rec.toVuln(eco)
-		if v.Package == "" {
-			continue
-		}
-		if err := fn(v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return loadFromZip(
+		url,
+		func(name string) bool {
+			return strings.HasSuffix(name, ".json")
+		},
+		func(name string, data []byte) error {
+			var rec osvRecord
+			if err := json.Unmarshal(data, &rec); err != nil {
+				return nil
+			}
+			v := rec.toVuln(eco)
+			if v.Package == "" {
+				return nil
+			}
+			return fn(v)
+		},
+	)
 }

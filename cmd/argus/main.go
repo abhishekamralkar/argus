@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
@@ -142,6 +144,15 @@ func ingestCmd(dbPath *string) *cobra.Command {
 		Use:   "ingest",
 		Short: "Download vulnerability databases and store embeddings",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !noChunk {
+				if chunkSize <= 0 {
+					return fmt.Errorf("--chunk-size must be positive, got %d", chunkSize)
+				}
+				if chunkOverlap < 0 || chunkOverlap >= chunkSize {
+					return fmt.Errorf("--chunk-overlap must be in [0, chunk-size), got %d (chunk-size=%d)", chunkOverlap, chunkSize)
+				}
+			}
+
 			db, err := store.Open(*dbPath)
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
@@ -301,8 +312,14 @@ func ingestSourceWhole(
 	}()
 
 	err := loader(func(v *store.Vulnerability) error {
-		if skipExisting && db.Exists(v.ID) {
-			return nil
+		if skipExisting {
+			exists, err := db.Exists(v.ID)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return nil
+			}
 		}
 		workCh <- v
 		return nil
@@ -378,8 +395,14 @@ func ingestSourceChunked(
 	}()
 
 	err := loader(func(v *store.Vulnerability) error {
-		if skipExisting && db.ExistsVuln(v.ID) {
-			return nil
+		if skipExisting {
+			exists, err := db.ExistsVuln(v.ID)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return nil
+			}
 		}
 		// Delete stale chunks before re-ingesting so count doesn't grow unbounded.
 		_ = db.DeleteChunksForVuln(v.ID)
@@ -421,6 +444,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var workers int
 	var minSeverity string
 	var failOn string
+	var timeoutMin int
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -428,6 +452,13 @@ func scanCmd(dbPath *string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectDir := args[0]
+
+			ctx := context.Background()
+			if timeoutMin > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMin)*time.Minute)
+				defer cancel()
+			}
 
 			// Load config file; CLI flags take precedence
 			cfg, _ := config.Load(projectDir)
@@ -477,7 +508,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				fmt.Printf("╚══════════════════════════════════════════════════════╝\n\n")
 			}
 
-			results := parallelScan(engine, deps, workers, isText)
+			results := parallelScan(ctx, engine, deps, workers, isText)
 
 			switch outputFmt {
 			case "json":
@@ -494,8 +525,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 			}
 			for _, r := range results {
 				v := r.Verdict()
-				if v == "CRITICAL" || v == threshold ||
-					(threshold == "MEDIUM" && (v == "HIGH" || v == "CRITICAL")) ||
+				if v == "CRITICAL" || v == "ERROR" || v == threshold ||
+					(threshold == "MEDIUM" && (v == "HIGH" || v == "CRITICAL" || v == "ERROR")) ||
 					(threshold == "LOW" && v != "OK" && v != "REVIEW") {
 					os.Exit(1)
 				}
@@ -510,11 +541,12 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL")
 	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
+	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	return cmd
 }
 
 // parallelScan runs AnalyzeDependency for each dep concurrently, preserving order.
-func parallelScan(engine *rag.Engine, deps []parser.Dependency, workers int, verbose bool) []rag.Result {
+func parallelScan(ctx context.Context, engine *rag.Engine, deps []parser.Dependency, workers int, verbose bool) []rag.Result {
 	type indexed struct {
 		i      int
 		result rag.Result
@@ -536,9 +568,7 @@ func parallelScan(engine *rag.Engine, deps []parser.Dependency, workers int, ver
 
 	var wg sync.WaitGroup
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for work := range depCh {
 				var out strings.Builder
 				if verbose {
@@ -553,9 +583,12 @@ func parallelScan(engine *rag.Engine, deps []parser.Dependency, workers int, ver
 				if verbose {
 					fmt.Println()
 				}
+				if ctx.Err() != nil {
+					return
+				}
 				resultCh <- indexed{work.i, r}
 			}
-		}()
+		})
 	}
 
 	go func() { wg.Wait(); close(resultCh) }()
