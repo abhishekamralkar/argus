@@ -18,6 +18,10 @@ func AffectsVersion(scannedVersion, fixedIn string) bool {
 	if sv == "" || fv == "" {
 		return true // can't compare, stay conservative
 	}
+	// If any segment is non-numeric after normalisation, stay conservative.
+	if !allNumericParts(sv) || !allNumericParts(fv) {
+		return true
+	}
 	return semverLess(sv, fv)
 }
 
@@ -64,8 +68,22 @@ func splitParts(v string) []string {
 	return strings.Split(v, ".")
 }
 
+// allNumericParts returns false if any non-empty dot-segment of v is not a
+// valid non-negative integer. Used to gate comparisons before calling semverLess.
+func allNumericParts(v string) bool {
+	for _, seg := range strings.Split(v, ".") {
+		if seg == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(seg); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func partInt(parts []string, i int) int {
-	if i >= len(parts) {
+	if i >= len(parts) || parts[i] == "" {
 		return 0
 	}
 	n, _ := strconv.Atoi(parts[i])

@@ -23,7 +23,19 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -timeout 120s ./...
+        run: go test -race -timeout 120s -coverprofile=coverage.out ./...
+
+      - name: Coverage gate (≥ 60%)
+        run: |
+          pct=$(go tool cover -func=coverage.out | awk '/total:/ {gsub(/%/,"",$3); print int($3)}')
+          echo "Coverage: ${pct}%"
+          if [ "${pct}" -lt 60 ]; then
+            echo "Coverage ${pct}% is below 60% threshold" >&2
+            exit 1
+          fi
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Benchmark (smoke)
         run: go test -bench=. -benchtime=1x -timeout 60s ./internal/store/...

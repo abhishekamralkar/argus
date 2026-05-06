@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,6 +21,37 @@ type Config struct {
 	ChunkOverlap int    `yaml:"chunk_overlap"`
 }
 
+var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
+var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true}
+
+// Validate checks field bounds and known enum values.
+func (c *Config) Validate() error {
+	if c.Workers < 0 {
+		return fmt.Errorf("workers must be >= 0, got %d", c.Workers)
+	}
+	if !validSeverities[strings.ToUpper(c.MinSeverity)] {
+		return fmt.Errorf("min_severity must be one of LOW, MEDIUM, HIGH, CRITICAL (got %q)", c.MinSeverity)
+	}
+	if c.Ecosystems != "" {
+		for eco := range strings.SplitSeq(c.Ecosystems, ",") {
+			eco = strings.TrimSpace(eco)
+			if eco != "" && !validEcosystems[eco] {
+				return fmt.Errorf("unknown ecosystem %q (valid: go, python, rust)", eco)
+			}
+		}
+	}
+	if c.ChunkSize < 0 {
+		return fmt.Errorf("chunk_size must be >= 0, got %d", c.ChunkSize)
+	}
+	if c.ChunkOverlap < 0 {
+		return fmt.Errorf("chunk_overlap must be >= 0, got %d", c.ChunkOverlap)
+	}
+	if c.ChunkSize > 0 && c.ChunkOverlap >= c.ChunkSize {
+		return fmt.Errorf("chunk_overlap must be < chunk_size, got %d >= %d", c.ChunkOverlap, c.ChunkSize)
+	}
+	return nil
+}
+
 // Load reads .argus.yaml from the given directory (typically the project root).
 // Returns an empty Config if the file does not exist.
 func Load(dir string) (*Config, error) {
@@ -33,6 +66,9 @@ func Load(dir string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf(".argus.yaml: %w", err)
 	}
 	return &cfg, nil
 }

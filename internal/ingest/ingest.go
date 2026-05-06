@@ -30,9 +30,14 @@ func downloadZip(url string) (*zip.Reader, error) {
 		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	const maxBytes = 512 << 20 // 512 MB hard cap
+	lr := io.LimitReader(resp.Body, maxBytes+1)
+	data, err := io.ReadAll(lr)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: read body: %w", url, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("download %s: response exceeds 512 MB size limit", url)
 	}
 	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
 }

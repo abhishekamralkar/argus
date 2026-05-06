@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +30,8 @@ import (
 
 // Version is set at build time via -ldflags "-X main.Version=v1.2.3".
 var Version = "dev"
+
+var validFailOnValues = map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
 
 func main() {
 	root := &cobra.Command{
@@ -87,13 +91,14 @@ func statusCmd(dbPath *string) *cobra.Command {
 		Use:   "status",
 		Short: "Show vulnerability database statistics",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
 			db, err := store.Open(*dbPath)
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
 			defer func() { _ = db.Close() }()
 
-			rows, err := db.Status()
+			rows, err := db.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("status: %w", err)
 			}
@@ -139,6 +144,8 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	var noChunk bool
 	var chunkSize int
 	var chunkOverlap int
+	var timeoutMin int
+	var quiet bool
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -151,6 +158,13 @@ func ingestCmd(dbPath *string) *cobra.Command {
 				if chunkOverlap < 0 || chunkOverlap >= chunkSize {
 					return fmt.Errorf("--chunk-overlap must be in [0, chunk-size), got %d (chunk-size=%d)", chunkOverlap, chunkSize)
 				}
+			}
+
+			ctx := context.Background()
+			if timeoutMin > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMin)*time.Minute)
+				defer cancel()
 			}
 
 			db, err := store.Open(*dbPath)
@@ -166,16 +180,22 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			}
 
 			embedder := embed.NewClient(embedModel)
+			var errs []error
 			for eco := range strings.SplitSeq(ecosystems, ",") {
 				eco = strings.TrimSpace(eco)
 				if eco == "" {
 					continue
 				}
-				if err := runIngest(db, embedder, eco, workers, skipExisting, cc); err != nil {
+				if ctx.Err() != nil {
+					errs = append(errs, fmt.Errorf("ingest cancelled: %w", ctx.Err()))
+					break
+				}
+				if err := runIngest(ctx, db, embedder, eco, workers, skipExisting, cc, quiet); err != nil {
 					fmt.Fprintf(os.Stderr, "ingest %s: %v\n", eco, err)
+					errs = append(errs, fmt.Errorf("%s: %w", eco, err))
 				}
 			}
-			return nil
+			return errors.Join(errs...)
 		},
 	}
 	cmd.Flags().StringVar(&ecosystems, "ecosystems", "go,python,rust", "comma-separated ecosystems to ingest")
@@ -185,12 +205,14 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&noChunk, "no-chunk", false, "disable document chunking (store whole advisory as one embedding)")
 	cmd.Flags().IntVar(&chunkSize, "chunk-size", ingest.DefaultChunkSize, "max characters per chunk")
 	cmd.Flags().IntVar(&chunkOverlap, "chunk-overlap", ingest.DefaultChunkOverlap, "overlap characters between chunks")
+	cmd.Flags().IntVar(&timeoutMin, "timeout", 0, "ingest timeout in minutes (0 = no timeout)")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress bar output (useful in CI)")
 	return cmd
 }
 
 const batchSize = 50
 
-func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig) error {
+func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool) error {
 	type source struct {
 		name string
 		fn   func(func(*store.Vulnerability) error) error
@@ -217,16 +239,18 @@ func runIngest(db *store.DB, embedder *embed.Client, ecosystem string, numWorker
 		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust)", ecosystem)
 	}
 
+	var errs []error
 	for _, src := range sources {
 		fmt.Printf("Ingesting %s (workers=%d, chunk=%v)...\n", src.name, numWorkers, cc.enabled)
-		if err := ingestSource(db, embedder, src.name, src.fn, numWorkers, skipExisting, cc); err != nil {
+		if err := ingestSource(ctx, db, embedder, src.name, src.fn, numWorkers, skipExisting, cc, quiet); err != nil {
 			fmt.Fprintf(os.Stderr, "  source %s failed: %v\n", src.name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", src.name, err))
 		}
 	}
 
-	count, _ := db.Count(ecosystem)
+	count, _ := db.Count(ctx, ecosystem)
 	fmt.Printf("Total %s vulnerabilities stored: %d\n", ecosystem, count)
-	return nil
+	return errors.Join(errs...)
 }
 
 // chunkWork is the unit sent to embed workers when chunking is enabled.
@@ -242,7 +266,16 @@ type chunkResult struct {
 	item store.ChunkItem
 }
 
+// progressAdder is the minimal interface used by ingest pipeline stages.
+type progressAdder interface{ Add(int) error }
+
+// noopProgress is a silent drop-in for progressbar used when --quiet is set.
+type noopProgress struct{}
+
+func (noopProgress) Add(int) error { return nil }
+
 func ingestSource(
+	ctx context.Context,
 	db *store.DB,
 	embedder *embed.Client,
 	name string,
@@ -250,24 +283,31 @@ func ingestSource(
 	numWorkers int,
 	skipExisting bool,
 	cc chunkConfig,
+	quiet bool,
 ) error {
-	bar := progressbar.Default(-1, name)
+	var bar progressAdder
+	if quiet {
+		bar = noopProgress{}
+	} else {
+		bar = progressbar.Default(-1, name)
+	}
 	var errCount atomic.Int64
 
 	if cc.enabled {
-		return ingestSourceChunked(db, embedder, name, loader, numWorkers, skipExisting, cc, bar, &errCount)
+		return ingestSourceChunked(ctx, db, embedder, name, loader, numWorkers, skipExisting, cc, bar, &errCount)
 	}
-	return ingestSourceWhole(db, embedder, name, loader, numWorkers, skipExisting, bar, &errCount)
+	return ingestSourceWhole(ctx, db, embedder, name, loader, numWorkers, skipExisting, bar, &errCount)
 }
 
 func ingestSourceWhole(
+	ctx context.Context,
 	db *store.DB,
 	embedder *embed.Client,
 	name string,
 	loader func(func(*store.Vulnerability) error) error,
 	numWorkers int,
 	skipExisting bool,
-	bar interface{ Add(int) error },
+	bar progressAdder,
 	errCount *atomic.Int64,
 ) error {
 	workCh := make(chan *store.Vulnerability, numWorkers*4)
@@ -279,6 +319,7 @@ func ingestSourceWhole(
 			for v := range workCh {
 				vec, err := embedder.Embed(v.Summary + "\n" + v.Details)
 				if err != nil {
+					slog.Warn("embed failed, skipping vulnerability", "vuln_id", v.ID, "source", name, "error", err)
 					errCount.Add(1)
 					continue
 				}
@@ -292,7 +333,8 @@ func ingestSourceWhole(
 	go func() {
 		batch := make([]store.EmbeddedVuln, 0, batchSize)
 		flush := func() {
-			if err := db.UpsertBatch(batch); err != nil {
+			if err := db.UpsertBatch(ctx, batch); err != nil {
+				slog.Warn("batch upsert failed", "source", name, "size", len(batch), "error", err)
 				errCount.Add(int64(len(batch)))
 			} else {
 				_ = bar.Add(len(batch))
@@ -313,7 +355,7 @@ func ingestSourceWhole(
 
 	err := loader(func(v *store.Vulnerability) error {
 		if skipExisting {
-			exists, err := db.Exists(v.ID)
+			exists, err := db.Exists(ctx, v.ID)
 			if err != nil {
 				return err
 			}
@@ -330,11 +372,12 @@ func ingestSourceWhole(
 	if n := errCount.Load(); n > 0 {
 		fmt.Printf("  %s: %d entries skipped due to errors\n", name, n)
 	}
-	_ = db.TouchIngestLog(name)
+	_ = db.TouchIngestLog(ctx, name)
 	return err
 }
 
 func ingestSourceChunked(
+	ctx context.Context,
 	db *store.DB,
 	embedder *embed.Client,
 	name string,
@@ -342,7 +385,7 @@ func ingestSourceChunked(
 	numWorkers int,
 	skipExisting bool,
 	cc chunkConfig,
-	bar interface{ Add(int) error },
+	bar progressAdder,
 	errCount *atomic.Int64,
 ) error {
 	workCh := make(chan chunkWork, numWorkers*4)
@@ -354,6 +397,7 @@ func ingestSourceChunked(
 			for w := range workCh {
 				vec, err := embedder.Embed(w.text)
 				if err != nil {
+					slog.Warn("embed failed, dropping chunk", "vuln_id", w.vuln.ID, "chunk_id", w.chunkID, "source", name, "error", err)
 					errCount.Add(1)
 					continue
 				}
@@ -375,7 +419,8 @@ func ingestSourceChunked(
 	go func() {
 		batch := make([]store.ChunkItem, 0, batchSize)
 		flush := func() {
-			if err := db.UpsertChunkBatch(batch); err != nil {
+			if err := db.UpsertChunkBatch(ctx, batch); err != nil {
+				slog.Warn("chunk batch upsert failed", "source", name, "size", len(batch), "error", err)
 				errCount.Add(int64(len(batch)))
 			} else {
 				_ = bar.Add(len(batch))
@@ -396,7 +441,7 @@ func ingestSourceChunked(
 
 	err := loader(func(v *store.Vulnerability) error {
 		if skipExisting {
-			exists, err := db.ExistsVuln(v.ID)
+			exists, err := db.ExistsVuln(ctx, v.ID)
 			if err != nil {
 				return err
 			}
@@ -405,8 +450,9 @@ func ingestSourceChunked(
 			}
 		}
 		// Delete stale chunks before re-ingesting so count doesn't grow unbounded.
-		_ = db.DeleteChunksForVuln(v.ID)
-		if err := db.UpsertVulnMeta(v); err != nil {
+		_ = db.DeleteChunksForVuln(ctx, v.ID)
+		if err := db.UpsertVulnMeta(ctx, v); err != nil {
+			slog.Warn("upsert vuln meta failed", "vuln_id", v.ID, "source", name, "error", err)
 			errCount.Add(1)
 			return nil
 		}
@@ -430,7 +476,7 @@ func ingestSourceChunked(
 	if n := errCount.Load(); n > 0 {
 		fmt.Printf("  %s: %d chunks skipped due to errors\n", name, n)
 	}
-	_ = db.TouchIngestLog(name)
+	_ = db.TouchIngestLog(ctx, name)
 	return err
 }
 
@@ -445,6 +491,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var minSeverity string
 	var failOn string
 	var timeoutMin int
+	var similarityThreshold float64
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -452,6 +499,11 @@ func scanCmd(dbPath *string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectDir := args[0]
+
+			if !validFailOnValues[strings.ToUpper(failOn)] {
+				return fmt.Errorf("--fail-on must be one of LOW, MEDIUM, HIGH, CRITICAL (got %q)", failOn)
+			}
+			failOn = strings.ToUpper(failOn)
 
 			ctx := context.Background()
 			if timeoutMin > 0 {
@@ -488,7 +540,12 @@ func scanCmd(dbPath *string) *cobra.Command {
 
 			embedder := embed.NewClient(embedModel)
 			generator := llm.NewClient(llmModel)
-			engine := rag.NewEngine(db, embedder, generator, enhanceQuery, minSeverity, ignoreList)
+			engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
+				EnhanceQuery:        enhanceQuery,
+				MinSeverity:         minSeverity,
+				SimilarityThreshold: similarityThreshold,
+				IgnoreList:          ignoreList,
+			})
 
 			deps, err := detectAndParse(projectDir)
 			if err != nil {
@@ -519,15 +576,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 				printSummaryTable(results)
 			}
 
-			threshold := failOn
-			if threshold == "" {
-				threshold = "HIGH"
-			}
 			for _, r := range results {
-				v := r.Verdict()
-				if v == "CRITICAL" || v == "ERROR" || v == threshold ||
-					(threshold == "MEDIUM" && (v == "HIGH" || v == "CRITICAL" || v == "ERROR")) ||
-					(threshold == "LOW" && v != "OK" && v != "REVIEW") {
+				if exceedsSeverity(r.Verdict(), failOn) {
 					os.Exit(1)
 				}
 			}
@@ -542,7 +592,15 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL")
 	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	return cmd
+}
+
+var severityRank = map[string]int{"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "ERROR": 5}
+
+// exceedsSeverity returns true when verdict is at or above the threshold level.
+func exceedsSeverity(verdict, threshold string) bool {
+	return severityRank[verdict] >= severityRank[threshold]
 }
 
 // parallelScan runs AnalyzeDependency for each dep concurrently, preserving order.
@@ -570,16 +628,14 @@ func parallelScan(ctx context.Context, engine *rag.Engine, deps []parser.Depende
 	for range workers {
 		wg.Go(func() {
 			for work := range depCh {
-				var out strings.Builder
 				if verbose {
 					fmt.Printf("┌─ [%d/%d] %s @ %s (%s)\n",
 						work.i+1, len(deps), work.dep.Name, work.dep.Version, work.dep.Ecosystem)
 				}
-				r, err := engine.AnalyzeDependency(work.dep, os.Stdout)
+				r, err := engine.AnalyzeDependency(ctx, work.dep, os.Stdout)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  analysis failed for %s: %v\n", work.dep.Name, err)
 				}
-				_ = out
 				if verbose {
 					fmt.Println()
 				}
@@ -633,12 +689,14 @@ func searchCmd(dbPath *string) *cobra.Command {
 	var ecosystem string
 	var embedModel string
 	var limit int
+	var similarityThreshold float64
 
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Semantic search against the vulnerability database",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
 			query := strings.Join(args, " ")
 
 			db, err := store.Open(*dbPath)
@@ -653,7 +711,7 @@ func searchCmd(dbPath *string) *cobra.Command {
 				return fmt.Errorf("embed query: %w", err)
 			}
 
-			results, err := db.Search(ecosystem, vec, limit)
+			results, err := db.Search(ctx, ecosystem, vec, limit, similarityThreshold)
 			if err != nil {
 				return fmt.Errorf("search: %w", err)
 			}
@@ -677,6 +735,7 @@ func searchCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&ecosystem, "ecosystem", "go", "ecosystem to search: go, python, rust")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&limit, "limit", 10, "maximum results to return")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1)")
 	return cmd
 }
 
