@@ -172,6 +172,139 @@ func TestAliasesRoundtrip(t *testing.T) {
 	}
 }
 
+func TestUpsertAndExists(t *testing.T) {
+	db := openTemp(t)
+
+	emb := make([]float32, 768)
+	emb[1] = 0.5
+
+	v := &Vulnerability{
+		ID:        "GO-2024-UPSERT",
+		Ecosystem: "go",
+		Package:   "example.com/upsert",
+		Summary:   "upsert test",
+		Severity:  "HIGH",
+		FixedIn:   "2.0.0",
+	}
+
+	// Should not exist yet
+	exists, err := db.Exists(bg, v.ID)
+	if err != nil {
+		t.Fatalf("Exists (before): %v", err)
+	}
+	if exists {
+		t.Fatal("should not exist before upsert")
+	}
+
+	if err := db.Upsert(bg, v, emb); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	exists, err = db.Exists(bg, v.ID)
+	if err != nil {
+		t.Fatalf("Exists (after): %v", err)
+	}
+	if !exists {
+		t.Fatal("should exist after upsert")
+	}
+}
+
+func TestCountAndTouchIngestLog(t *testing.T) {
+	db := openTemp(t)
+
+	for _, id := range []string{"R1", "R2", "R3"} {
+		if err := db.UpsertVulnMeta(bg, &Vulnerability{
+			ID: id, Ecosystem: "rust", Package: "crate", Summary: "s",
+		}); err != nil {
+			t.Fatalf("UpsertVulnMeta %s: %v", id, err)
+		}
+	}
+
+	n, err := db.Count(bg, "rust")
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("Count = %d, want 3", n)
+	}
+
+	if err := db.TouchIngestLog(bg, "RustSec"); err != nil {
+		t.Fatalf("TouchIngestLog: %v", err)
+	}
+	// Idempotent second call
+	if err := db.TouchIngestLog(bg, "RustSec"); err != nil {
+		t.Fatalf("TouchIngestLog (second call): %v", err)
+	}
+}
+
+func TestSearchBestFallsBackToWhole(t *testing.T) {
+	db := openTemp(t)
+
+	emb := make([]float32, 768)
+	for i := range emb {
+		emb[i] = float32(i) / 768
+	}
+
+	v := &Vulnerability{
+		ID:        "PY-2024-0001",
+		Ecosystem: "python",
+		Package:   "requests",
+		Summary:   "SSRF in requests",
+		Severity:  "HIGH",
+		FixedIn:   "2.32.0",
+	}
+	if err := db.UpsertBatch(bg, []EmbeddedVuln{{Vuln: v, Embedding: emb}}); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+
+	// No chunks stored → should fall back to whole-vuln search
+	results, err := db.SearchBest(bg, "python", emb, 5, 0.1)
+	if err != nil {
+		t.Fatalf("SearchBest: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result from SearchBest fallback")
+	}
+	if results[0].ID != "PY-2024-0001" {
+		t.Errorf("got %q, want PY-2024-0001", results[0].ID)
+	}
+}
+
+func TestSearchBestUsesChunks(t *testing.T) {
+	db := openTemp(t)
+
+	emb := make([]float32, 768)
+	for i := range emb {
+		emb[i] = float32(i+1) / 768
+	}
+
+	v := &Vulnerability{
+		ID:        "GO-2024-CHUNK",
+		Ecosystem: "go",
+		Package:   "example.com/chunked",
+		Summary:   "chunked search test",
+	}
+	if err := db.UpsertVulnMeta(bg, v); err != nil {
+		t.Fatalf("UpsertVulnMeta: %v", err)
+	}
+	if err := db.UpsertChunkBatch(bg, []ChunkItem{
+		{ChunkID: "GO-2024-CHUNK_c0", VulnID: v.ID, Content: "chunk content", Embedding: emb},
+	}); err != nil {
+		t.Fatalf("UpsertChunkBatch: %v", err)
+	}
+
+	results, err := db.SearchBest(bg, "go", emb, 5, 0.1)
+	if err != nil {
+		t.Fatalf("SearchBest (chunks): %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result from chunk search")
+	}
+	if results[0].ID != "GO-2024-CHUNK" {
+		t.Errorf("got %q, want GO-2024-CHUNK", results[0].ID)
+	}
+}
+
 // ── benchmarks ───────────────────────────────────────────────────────────────
 
 func BenchmarkUpsertChunkBatch(b *testing.B) {
