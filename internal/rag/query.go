@@ -2,6 +2,7 @@ package rag
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"slices"
@@ -20,30 +21,33 @@ import (
 
 var severityOrder = map[string]int{"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
-type Engine struct {
-	db           *store.DB
-	embedder     *embed.Client
-	generator    *llm.Client
-	enhanceQuery bool
-	minSeverity  string
-	ignoreList   *ignore.List
+// EngineConfig holds optional settings for the RAG engine.
+// Zero values are safe: similarity threshold defaults to store.DefaultSimilarityThreshold.
+type EngineConfig struct {
+	EnhanceQuery        bool
+	MinSeverity         string
+	SimilarityThreshold float64
+	IgnoreList          *ignore.List
 }
 
-func NewEngine(
-	db *store.DB,
-	embedder *embed.Client,
-	generator *llm.Client,
-	enhanceQuery bool,
-	minSeverity string,
-	ignoreList *ignore.List,
-) *Engine {
+type Engine struct {
+	db        *store.DB
+	embedder  *embed.Client
+	generator *llm.Client
+	cfg       EngineConfig
+}
+
+// NewEngine constructs an Engine. If cfg.SimilarityThreshold is zero the
+// store default (0.5) is used.
+func NewEngine(db *store.DB, embedder *embed.Client, generator *llm.Client, cfg EngineConfig) *Engine {
+	if cfg.SimilarityThreshold == 0 {
+		cfg.SimilarityThreshold = store.DefaultSimilarityThreshold
+	}
 	return &Engine{
-		db:           db,
-		embedder:     embedder,
-		generator:    generator,
-		enhanceQuery: enhanceQuery,
-		minSeverity:  minSeverity,
-		ignoreList:   ignoreList,
+		db:        db,
+		embedder:  embedder,
+		generator: generator,
+		cfg:       cfg,
 	}
 }
 
@@ -96,11 +100,11 @@ func (e *Engine) enhanceQueryText(query string) string {
 
 // AnalyzeDependency runs the full RAG pipeline for a single dependency.
 // Retrieved CVEs are printed as a table; LLM output is streamed to out.
-func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result, error) {
+func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, out io.Writer) (Result, error) {
 	result := Result{Dep: dep}
 
 	query := fmt.Sprintf("%s package %s version %s vulnerability security", dep.Ecosystem, dep.Name, dep.Version)
-	if e.enhanceQuery {
+	if e.cfg.EnhanceQuery {
 		query = e.enhanceQueryText(query)
 	}
 	vec, err := e.embedder.Embed(query)
@@ -109,7 +113,7 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 		return result, nil
 	}
 
-	hits, err := e.db.SearchBest(dep.Ecosystem, vec, 10)
+	hits, err := e.db.SearchBest(ctx, dep.Ecosystem, vec, 10, e.cfg.SimilarityThreshold)
 	if err != nil {
 		result.Err = fmt.Errorf("vector search: %w", err)
 		return result, nil
@@ -121,15 +125,15 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 	var relevant []store.SearchResult
 	for _, r := range hits {
 		// Skip if package is on the ignore list
-		if e.ignoreList != nil && e.ignoreList.Package(r.Package) {
+		if e.cfg.IgnoreList != nil && e.cfg.IgnoreList.Package(r.Package) {
 			continue
 		}
 		// Skip if this specific vuln ID (or any alias) is ignored
-		if e.ignoreList != nil {
-			if e.ignoreList.VulnID(r.ID) {
+		if e.cfg.IgnoreList != nil {
+			if e.cfg.IgnoreList.VulnID(r.ID) {
 				continue
 			}
-			if slices.ContainsFunc(r.Aliases, e.ignoreList.VulnID) {
+			if slices.ContainsFunc(r.Aliases, e.cfg.IgnoreList.VulnID) {
 				continue
 			}
 		}
@@ -159,8 +163,8 @@ func (e *Engine) AnalyzeDependency(dep parser.Dependency, out io.Writer) (Result
 			continue
 		}
 		// Min-severity filter
-		if e.minSeverity != "" && r.Severity != "" {
-			if severityOrder[r.Severity] < severityOrder[e.minSeverity] {
+		if e.cfg.MinSeverity != "" && r.Severity != "" {
+			if severityOrder[r.Severity] < severityOrder[e.cfg.MinSeverity] {
 				continue
 			}
 		}

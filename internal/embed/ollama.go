@@ -46,7 +46,10 @@ func (c *Client) Embed(text string) ([]float32, error) {
 	if len(text) > 8000 {
 		text = text[:8000]
 	}
-	body, _ := json.Marshal(embedRequest{Model: c.model, Prompt: text})
+	body, err := json.Marshal(embedRequest{Model: c.model, Prompt: text})
+	if err != nil {
+		return nil, fmt.Errorf("marshal embed request: %w", err)
+	}
 
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {

@@ -51,11 +51,14 @@ type generateChunk struct {
 // Generate streams the LLM response, writing tokens to out as they arrive.
 // Retries up to 3 times on HTTP 500 (model loading) with exponential backoff.
 func (c *Client) Generate(prompt string, out io.Writer) error {
-	body, _ := json.Marshal(generateRequest{
+	body, err := json.Marshal(generateRequest{
 		Model:  c.model,
 		Prompt: prompt,
 		Stream: true,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal generate request: %w", err)
+	}
 
 	var lastErr error
 	for attempt := range 3 {

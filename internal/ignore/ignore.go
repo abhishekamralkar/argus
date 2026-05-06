@@ -3,6 +3,7 @@ package ignore
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ func Load(dir string) (*List, error) {
 		ids:      make(map[string]bool),
 		packages: make(map[string]bool),
 	}
-	f, err := os.Open(dir + "/.argusignore")
+	f, err := os.Open(filepath.Join(dir, ".argusignore"))
 	if os.IsNotExist(err) {
 		return l, nil
 	}

@@ -1,10 +1,13 @@
 package store
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+var bg = context.Background()
 
 func openTemp(t *testing.T) *DB {
 	t.Helper()
@@ -28,12 +31,12 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 		Severity:  "HIGH",
 		FixedIn:   "1.2.3",
 	}
-	if err := db.UpsertVulnMeta(v); err != nil {
+	if err := db.UpsertVulnMeta(bg, v); err != nil {
 		t.Fatalf("UpsertVulnMeta: %v", err)
 	}
 
 	// No chunks yet
-	exists, err := db.ExistsVuln(v.ID)
+	exists, err := db.ExistsVuln(bg, v.ID)
 	if err != nil {
 		t.Fatalf("ExistsVuln: %v", err)
 	}
@@ -47,11 +50,11 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 		Content:   "Test vulnerability content",
 		Embedding: make([]float32, 768),
 	}
-	if err := db.UpsertChunkBatch([]ChunkItem{chunk}); err != nil {
+	if err := db.UpsertChunkBatch(bg, []ChunkItem{chunk}); err != nil {
 		t.Fatalf("UpsertChunkBatch: %v", err)
 	}
 
-	exists, err = db.ExistsVuln(v.ID)
+	exists, err = db.ExistsVuln(bg, v.ID)
 	if err != nil {
 		t.Fatalf("ExistsVuln after insert: %v", err)
 	}
@@ -69,7 +72,7 @@ func TestDeleteChunksForVuln(t *testing.T) {
 		Package:   "requests",
 		Summary:   "Chunk dedup test",
 	}
-	if err := db.UpsertVulnMeta(v); err != nil {
+	if err := db.UpsertVulnMeta(bg, v); err != nil {
 		t.Fatalf("UpsertVulnMeta: %v", err)
 	}
 
@@ -77,11 +80,11 @@ func TestDeleteChunksForVuln(t *testing.T) {
 		{ChunkID: "TEST-2024-0002_c0", VulnID: v.ID, Content: "chunk 0", Embedding: make([]float32, 768)},
 		{ChunkID: "TEST-2024-0002_c1", VulnID: v.ID, Content: "chunk 1", Embedding: make([]float32, 768)},
 	}
-	if err := db.UpsertChunkBatch(chunks); err != nil {
+	if err := db.UpsertChunkBatch(bg, chunks); err != nil {
 		t.Fatalf("UpsertChunkBatch: %v", err)
 	}
 
-	n, err := db.CountChunks("python")
+	n, err := db.CountChunks(bg, "python")
 	if err != nil {
 		t.Fatalf("CountChunks: %v", err)
 	}
@@ -89,11 +92,11 @@ func TestDeleteChunksForVuln(t *testing.T) {
 		t.Errorf("expected 2 chunks, got %d", n)
 	}
 
-	if err := db.DeleteChunksForVuln(v.ID); err != nil {
+	if err := db.DeleteChunksForVuln(bg, v.ID); err != nil {
 		t.Fatalf("DeleteChunksForVuln: %v", err)
 	}
 
-	n, err = db.CountChunks("python")
+	n, err = db.CountChunks(bg, "python")
 	if err != nil {
 		t.Fatalf("CountChunks after delete: %v", err)
 	}
@@ -110,12 +113,12 @@ func TestStatus(t *testing.T) {
 		{ID: "G2", Ecosystem: "go", Package: "pkg2", Summary: "s"},
 		{ID: "P1", Ecosystem: "python", Package: "flask", Summary: "s"},
 	} {
-		if err := db.UpsertVulnMeta(v); err != nil {
+		if err := db.UpsertVulnMeta(bg, v); err != nil {
 			t.Fatalf("UpsertVulnMeta %s: %v", v.ID, err)
 		}
 	}
 
-	rows, err := db.Status()
+	rows, err := db.Status(bg)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -144,11 +147,11 @@ func TestAliasesRoundtrip(t *testing.T) {
 		Summary:   "alias test",
 		Aliases:   []string{"CVE-2024-1234", "GHSA-xxxx-yyyy-zzzz"},
 	}
-	if err := db.UpsertBatch([]EmbeddedVuln{{Vuln: v, Embedding: emb}}); err != nil {
+	if err := db.UpsertBatch(bg, []EmbeddedVuln{{Vuln: v, Embedding: emb}}); err != nil {
 		t.Fatalf("UpsertBatch: %v", err)
 	}
 
-	results, err := db.Search("go", emb, 5)
+	results, err := db.Search(bg, "go", emb, 5, DefaultSimilarityThreshold)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -179,7 +182,7 @@ func BenchmarkUpsertChunkBatch(b *testing.B) {
 	}
 	defer db.Close()
 
-	_ = db.UpsertVulnMeta(&Vulnerability{
+	_ = db.UpsertVulnMeta(bg, &Vulnerability{
 		ID: "BENCH-0001", Ecosystem: "go", Package: "pkg", Summary: "bench",
 	})
 
@@ -196,7 +199,7 @@ func BenchmarkUpsertChunkBatch(b *testing.B) {
 			Content:   "benchmark chunk content",
 			Embedding: emb,
 		}
-		_ = db.UpsertChunkBatch([]ChunkItem{chunk})
+		_ = db.UpsertChunkBatch(bg, []ChunkItem{chunk})
 	}
 }
 
@@ -213,7 +216,6 @@ func BenchmarkSearch(b *testing.B) {
 		emb[i] = float32(i) / 768
 	}
 
-	// Seed 100 vulnerabilities
 	batch := make([]EmbeddedVuln, 100)
 	for i := range batch {
 		batch[i] = EmbeddedVuln{
@@ -226,13 +228,13 @@ func BenchmarkSearch(b *testing.B) {
 			Embedding: emb,
 		}
 	}
-	if err := db.UpsertBatch(batch); err != nil {
+	if err := db.UpsertBatch(bg, batch); err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for range b.N {
-		_, _ = db.Search("go", emb, 10)
+		_, _ = db.Search(bg, "go", emb, 10, DefaultSimilarityThreshold)
 	}
 }
 
