@@ -3,8 +3,8 @@
 /cmd/argus/vulnscan
 /dist/
 
-# Claude Code
-.claude/
+# Claude Code — ignore local settings but track shared commands
+.claude/settings.local.json
 
 # Database files
 *.db
