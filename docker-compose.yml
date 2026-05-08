@@ -1,0 +1,28 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: argus-ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  argus:
+    image: ghcr.io/abhishekamralkar/argus:latest
+    container_name: argus
+    depends_on:
+      - ollama
+    volumes:
+      - argus-data:/data
+      - ./:/scan:ro
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    # Ingest: docker compose run argus ingest
+    # Scan:   docker compose run argus scan /scan
+    entrypoint: ["argus", "--db", "/data/vulns.db"]
+    command: ["--help"]
+
+volumes:
+  ollama-data:
+  argus-data:
