@@ -19,6 +19,8 @@ type Config struct {
 	Ecosystems   string `yaml:"ecosystems"`
 	ChunkSize    int    `yaml:"chunk_size"`
 	ChunkOverlap int    `yaml:"chunk_overlap"`
+	LLMBaseURL   string `yaml:"llm_base_url"`
+	EmbedBaseURL string `yaml:"embed_base_url"`
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
