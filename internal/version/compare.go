@@ -4,53 +4,77 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // AffectsVersion returns true when scannedVersion is older than fixedIn,
 // meaning the scanned dep is still vulnerable.
 // Returns true (assume vulnerable) when either version cannot be parsed.
+//
+// Comparison strategy (in order):
+//  1. If both versions are valid semver, use golang.org/x/mod/semver which
+//     correctly orders pre-release versions (v1.2.3-beta < v1.2.3).
+//  2. Fall back to numeric dot-segment comparison for non-semver versions
+//     (e.g. two-part versions, date-based all-numeric versions).
+//  3. If neither version parses cleanly, assume vulnerable (conservative).
 func AffectsVersion(scannedVersion, fixedIn string) bool {
 	if fixedIn == "" {
 		return true // no fix released yet — still vulnerable
 	}
-	sv := normalize(scannedVersion)
-	fv := normalize(fixedIn)
-	if sv == "" || fv == "" {
-		return true // can't compare, stay conservative
+
+	// Semver-aware path: handles pre-release ordering correctly.
+	sv := canonicalSemver(scannedVersion)
+	fv := canonicalSemver(fixedIn)
+	if sv != "" && fv != "" {
+		return semver.Compare(sv, fv) < 0
 	}
-	// If any segment is non-numeric after normalisation, stay conservative.
-	if !allNumericParts(sv) || !allNumericParts(fv) {
+
+	// Numeric fallback for versions that are not valid semver (e.g. "1.2",
+	// "2024.01.01") but consist only of dot-separated integers.
+	svn := normalize(scannedVersion)
+	fvn := normalize(fixedIn)
+	if svn == "" || fvn == "" {
 		return true
 	}
-	return semverLess(sv, fv)
+	if !allNumericParts(svn) || !allNumericParts(fvn) {
+		return true
+	}
+	return semverLess(svn, fvn)
+}
+
+// canonicalSemver converts a version string to a v-prefixed semver string
+// that golang.org/x/mod/semver accepts. Returns "" for non-semver versions.
+func canonicalSemver(v string) string {
+	v = strings.TrimSpace(v)
+	v = "v" + strings.TrimLeft(v, "vV")
+	if semver.IsValid(v) {
+		return v
+	}
+	return ""
 }
 
 var nonDigit = regexp.MustCompile(`[^0-9.]`)
 
-// normalize strips leading "v", epoch prefixes, and extra labels so
-// "v1.2.3-beta" becomes "1.2.3".
+// normalize strips leading "v", pre-release and build-metadata suffixes, and
+// any remaining non-numeric characters, leaving a plain dot-separated number
+// suitable for the numeric fallback path.
 func normalize(v string) string {
 	v = strings.TrimSpace(v)
-	// strip leading 'v' or 'V'
 	v = strings.TrimLeft(v, "vV")
-	// drop pre-release / build metadata suffix (-, +)
 	if i := strings.IndexAny(v, "-+"); i != -1 {
 		v = v[:i]
 	}
-	// remove any remaining non-numeric, non-dot characters
 	v = nonDigit.ReplaceAllString(v, "")
 	v = strings.Trim(v, ".")
 	return v
 }
 
-// semverLess returns true if a < b using numeric segment comparison.
+// semverLess returns true if a < b using numeric dot-segment comparison.
 func semverLess(a, b string) bool {
-	as := splitParts(a)
-	bs := splitParts(b)
-	maxLen := len(as)
-	if len(bs) > maxLen {
-		maxLen = len(bs)
-	}
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	maxLen := max(len(as), len(bs))
 	for i := range maxLen {
 		ai := partInt(as, i)
 		bi := partInt(bs, i)
@@ -61,17 +85,13 @@ func semverLess(a, b string) bool {
 			return false
 		}
 	}
-	return false // equal
-}
-
-func splitParts(v string) []string {
-	return strings.Split(v, ".")
+	return false
 }
 
 // allNumericParts returns false if any non-empty dot-segment of v is not a
-// valid non-negative integer. Used to gate comparisons before calling semverLess.
+// valid non-negative integer.
 func allNumericParts(v string) bool {
-	for _, seg := range strings.Split(v, ".") {
+	for seg := range strings.SplitSeq(v, ".") {
 		if seg == "" {
 			continue
 		}
