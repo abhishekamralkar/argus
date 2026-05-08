@@ -66,9 +66,4 @@ Then create the PR with `gh pr create` targeting `main`. Write a clear summary c
 - Any vulnerability fixes applied in step 3–4 (if any)
 - Test plan (what was run and passed)
 
-End the PR body with:
-```
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-```
-
 Return the PR URL to the user.
