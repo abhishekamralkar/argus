@@ -130,12 +130,12 @@ func TestContainsWholeWord(t *testing.T) {
 		want    bool
 	}{
 		{"the requests library", "requests", true},
-		{"requests library", "requests", true},  // at start
-		{"use requests", "requests", true},       // at end
-		{"requests", "requests", true},           // exact
-		{"requests-mock", "requests", false},     // hyphen boundary
-		{"requests_mock", "requests", false},     // underscore boundary
-		{"xrequests", "requests", false},         // letter boundary
+		{"requests library", "requests", true},         // at start
+		{"use requests", "requests", true},             // at end
+		{"requests", "requests", true},                 // exact
+		{"requests-mock", "requests", false},           // hyphen boundary
+		{"requests_mock", "requests", false},           // underscore boundary
+		{"xrequests", "requests", false},               // letter boundary
 		{"use requests2 carefully", "requests", false}, // digit boundary
 	}
 	for _, c := range cases {
