@@ -22,7 +22,7 @@ type Config struct {
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
-var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true}
+var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true, "npm": true}
 
 // Validate checks field bounds and known enum values.
 func (c *Config) Validate() error {
