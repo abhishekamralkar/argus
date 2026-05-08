@@ -120,7 +120,6 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 	}
 
 	// Filter: package name match + version-aware + ignore list + min-severity + alias dedup.
-	nameLower := strings.ToLower(dep.Name)
 	seenID := make(map[string]bool) // dedup by canonical ID and all aliases
 	var relevant []store.SearchResult
 	for _, r := range hits {
@@ -152,10 +151,8 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 		for _, alias := range r.Aliases {
 			seenID[alias] = true
 		}
-		// Package name match
-		nameMatch := strings.Contains(strings.ToLower(r.Package), nameLower) ||
-			strings.Contains(strings.ToLower(r.Content), nameLower)
-		if !nameMatch {
+		// Package name match (tiered: exact → module-path suffix → whole-word in content)
+		if !packageMatches(r.Package, r.Content, dep.Name) {
 			continue
 		}
 		// Version-aware: skip if already fixed
@@ -261,6 +258,48 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// packageMatches reports whether a vulnerability's package name corresponds to
+// the given dependency using a tiered strategy that avoids false positives from
+// plain substring matching (e.g. "requests" matching "requests-mock"):
+//
+//  1. Exact match (case-insensitive): "requests" == "requests"
+//  2. Module-path suffix: "github.com/foo/requests" has suffix "/requests"
+//  3. Whole-word scan of the vulnerability content (fallback for advisory text)
+func packageMatches(vulnPackage, content, depName string) bool {
+	pkg := strings.ToLower(vulnPackage)
+	dep := strings.ToLower(depName)
+	if pkg == dep {
+		return true
+	}
+	if strings.HasSuffix(pkg, "/"+dep) {
+		return true
+	}
+	return containsWholeWord(strings.ToLower(content), dep)
+}
+
+// containsWholeWord reports whether word appears as a whole word in s, where
+// word boundaries are any character that is not part of a package/module name
+// (alphanumeric, hyphen, underscore, dot).
+func containsWholeWord(s, word string) bool {
+	n := len(word)
+	for i := 0; i <= len(s)-n; i++ {
+		if s[i:i+n] == word {
+			before := i == 0 || !isPkgNameChar(s[i-1])
+			after := i+n == len(s) || !isPkgNameChar(s[i+n])
+			if before && after {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isPkgNameChar returns true for characters that can appear inside a package or
+// module name, used to detect word boundaries in vulnerability content.
+func isPkgNameChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == '.'
 }
 
 // writerFunc adapts a func to io.Writer.
