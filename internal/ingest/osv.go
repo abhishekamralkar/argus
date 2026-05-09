@@ -9,11 +9,14 @@ import (
 	"github.com/abhishekamralkar/argus/internal/store"
 )
 
+var osvSeverityRank = map[string]int{"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
 // OSV ecosystem → our canonical name
 var osvEcosystems = map[string]string{
 	"Go":        "go",
 	"PyPI":      "python",
 	"crates.io": "rust",
+	"npm":       "npm",
 	"Maven":     "maven",
 	"NuGet":     "nuget",
 }
@@ -23,6 +26,7 @@ var osvURLs = map[string]string{
 	"Go":        "https://osv-vulnerabilities.storage.googleapis.com/Go/all.zip",
 	"PyPI":      "https://osv-vulnerabilities.storage.googleapis.com/PyPI/all.zip",
 	"crates.io": "https://osv-vulnerabilities.storage.googleapis.com/crates.io/all.zip",
+	"npm":       "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip",
 	"Maven":     "https://osv-vulnerabilities.storage.googleapis.com/Maven/all.zip",
 	"NuGet":     "https://osv-vulnerabilities.storage.googleapis.com/NuGet/all.zip",
 }
@@ -76,15 +80,15 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 
 	severity := ""
 	for _, s := range r.Severity {
-		if strings.HasPrefix(s.Score, "CRITICAL") {
-			severity = "CRITICAL"
-			break
-		} else if strings.HasPrefix(s.Score, "HIGH") && severity != "CRITICAL" {
-			severity = "HIGH"
-		} else if strings.HasPrefix(s.Score, "MEDIUM") && severity == "" {
-			severity = "MEDIUM"
-		} else if strings.HasPrefix(s.Score, "LOW") && severity == "" {
-			severity = "LOW"
+		var sev string
+		// Try plain label first; fall back to CVSS vector computation.
+		if norm := normalizeSeverity(s.Score); norm != "" {
+			sev = norm
+		} else if score, ok := cvssV3BaseScore(s.Score); ok {
+			sev = cvssScoreToSeverity(score)
+		}
+		if osvSeverityRank[sev] > osvSeverityRank[severity] {
+			severity = sev
 		}
 	}
 
