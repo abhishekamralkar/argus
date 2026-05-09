@@ -122,6 +122,173 @@ func TestParseGoMod_EcosystemIsGo(t *testing.T) {
 	}
 }
 
+func TestParsePomXML(t *testing.T) {
+	deps, err := parser.ParsePomXML("testdata/pom.xml")
+	if err != nil {
+		t.Fatalf("ParsePomXML: %v", err)
+	}
+
+	byName := index(deps)
+
+	cases := []struct{ name, version string }{
+		{"com.google.guava:guava", "32.1.2-jre"},
+		{"org.springframework:spring-core", "5.3.27"}, // from dependencyManagement
+		{"log4j:log4j", "1.2.14"},                     // lower bound of range
+		{"junit:junit", "4.13.2"},
+	}
+	for _, c := range cases {
+		d, ok := byName[c.name]
+		if !ok {
+			t.Errorf("missing dependency %s", c.name)
+			continue
+		}
+		if d.Version != c.version {
+			t.Errorf("%s: want version %q, got %q", c.name, c.version, d.Version)
+		}
+		if d.Ecosystem != "maven" {
+			t.Errorf("%s: want ecosystem maven, got %s", c.name, d.Ecosystem)
+		}
+	}
+}
+
+func TestParseCsproj(t *testing.T) {
+	deps, err := parser.ParseCsproj("testdata/test.csproj")
+	if err != nil {
+		t.Fatalf("ParseCsproj: %v", err)
+	}
+
+	byName := index(deps)
+
+	cases := []struct{ name, version string }{
+		{"Newtonsoft.Json", "13.0.3"},
+		{"Microsoft.Extensions.Logging", "7.0.0"},
+		{"Dapper", "2.0.151"},
+		{"xunit", "2.5.3"},
+	}
+	for _, c := range cases {
+		d, ok := byName[c.name]
+		if !ok {
+			t.Errorf("missing dependency %s", c.name)
+			continue
+		}
+		if d.Version != c.version {
+			t.Errorf("%s: want version %q, got %q", c.name, c.version, d.Version)
+		}
+		if d.Ecosystem != "nuget" {
+			t.Errorf("%s: want ecosystem nuget, got %s", c.name, d.Ecosystem)
+		}
+	}
+}
+
+func TestParsePackagesConfig(t *testing.T) {
+	deps, err := parser.ParsePackagesConfig("testdata/packages.config")
+	if err != nil {
+		t.Fatalf("ParsePackagesConfig: %v", err)
+	}
+
+	byName := index(deps)
+
+	cases := []struct{ name, version string }{
+		{"Newtonsoft.Json", "13.0.3"},
+		{"log4net", "2.0.15"},
+	}
+	for _, c := range cases {
+		d, ok := byName[c.name]
+		if !ok {
+			t.Errorf("missing dependency %s", c.name)
+			continue
+		}
+		if d.Version != c.version {
+			t.Errorf("%s: want version %q, got %q", c.name, c.version, d.Version)
+		}
+		if d.Ecosystem != "nuget" {
+			t.Errorf("%s: want ecosystem nuget, got %s", c.name, d.Ecosystem)
+		}
+	}
+}
+
+func TestParsePackageJSON(t *testing.T) {
+	deps, err := parser.ParsePackageJSON("testdata/package.json")
+	if err != nil {
+		t.Fatalf("ParsePackageJSON: %v", err)
+	}
+
+	byName := index(deps)
+
+	cases := []struct{ name, version string }{
+		{"express", "4.18.2"},   // ^ stripped
+		{"lodash", "4.17.21"},   // ~ stripped
+		{"axios", "1.4.0"},      // >= stripped
+		{"jest", "29.0.0"},      // ^ stripped (devDep)
+		{"eslint", "8.0.0"},     // exact (devDep)
+	}
+	for _, c := range cases {
+		d, ok := byName[c.name]
+		if !ok {
+			t.Errorf("missing dependency %s", c.name)
+			continue
+		}
+		if d.Version != c.version {
+			t.Errorf("%s: want version %s, got %s", c.name, c.version, d.Version)
+		}
+		if d.Ecosystem != "npm" {
+			t.Errorf("%s: want ecosystem npm, got %s", c.name, d.Ecosystem)
+		}
+	}
+}
+
+func TestParsePackageLockJSON(t *testing.T) {
+	deps, err := parser.ParsePackageLockJSON("testdata/package-lock.json")
+	if err != nil {
+		t.Fatalf("ParsePackageLockJSON: %v", err)
+	}
+
+	byName := index(deps)
+
+	cases := []struct{ name, version string }{
+		{"express", "4.18.2"},
+		{"lodash", "4.17.21"},
+	}
+	for _, c := range cases {
+		d, ok := byName[c.name]
+		if !ok {
+			t.Errorf("missing dependency %s", c.name)
+			continue
+		}
+		if d.Version != c.version {
+			t.Errorf("%s: want version %s, got %s", c.name, c.version, d.Version)
+		}
+		if d.Ecosystem != "npm" {
+			t.Errorf("%s: want ecosystem npm, got %s", c.name, d.Ecosystem)
+		}
+	}
+	// Root package entry ("" key) must not appear
+	if _, ok := byName[""]; ok {
+		t.Error("root package entry should be filtered out")
+	}
+}
+
+func TestStripNPMRange(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"^4.18.2", "4.18.2"},
+		{"~4.17.21", "4.17.21"},
+		{">=1.4.0", "1.4.0"},
+		{">1.0.0", "1.0.0"},
+		{"<=2.0.0", "2.0.0"},
+		{"<3.0.0", "3.0.0"},
+		{"=1.2.3", "1.2.3"},
+		{"v1.2.3", "1.2.3"},
+		{"1.2.3", "1.2.3"},
+		{"latest", "latest"},
+	}
+	for _, c := range cases {
+		got := parser.StripNPMRange(c.in)
+		if got != c.want {
+			t.Errorf("StripNPMRange(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // index builds a name → Dependency map; last write wins for duplicates.
 func index(deps []parser.Dependency) map[string]parser.Dependency {
 	m := make(map[string]parser.Dependency, len(deps))

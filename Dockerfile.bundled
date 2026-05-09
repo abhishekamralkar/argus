@@ -1,0 +1,51 @@
+# Dockerfile.bundled — argus + Ollama in a single image.
+# This image needs no external Ollama instance; it starts ollama serve
+# automatically via the entrypoint and pulls models on first run.
+#
+# GPU note: for GPU acceleration mount the NVIDIA runtime or add
+#   --runtime=nvidia --gpus all
+# when running the container.  On CPU-only hardware the image works but
+# inference will be slower.
+
+# ── build argus ──────────────────────────────────────────────────────────────
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=1 go build \
+      -ldflags "-s -w -X main.Version=${VERSION}" \
+      -o /argus ./cmd/argus
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Ollama binary from the official image (avoids running the install script).
+COPY --from=ollama/ollama:latest /bin/ollama /usr/local/bin/ollama
+
+# Copy argus binary and entrypoint.
+COPY --from=builder /argus /usr/local/bin/argus
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Data volume: DuckDB file + Ollama model cache.
+VOLUME ["/data"]
+
+ENV ARGUS_DB=/data/vulns.db
+ENV OLLAMA_MODELS=/data/ollama/models
+ENV OLLAMA_HOST=http://localhost:11434
+
+# Set a default model; override with ARGUS_LLM_MODEL and ARGUS_EMBED_MODEL.
+ENV ARGUS_LLM_MODEL=gpt-oss:20b
+ENV ARGUS_EMBED_MODEL=nomic-embed-text
+
+ENTRYPOINT ["docker-entrypoint.sh", "--db", "/data/vulns.db"]
+CMD ["--help"]

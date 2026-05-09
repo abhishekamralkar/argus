@@ -10,7 +10,7 @@ import (
 
 func newTestClient(srv *httptest.Server) *Client {
 	c := NewClient("")
-	c.host = srv.URL
+	c.baseURL = srv.URL
 	c.client = srv.Client()
 	return c
 }
@@ -25,7 +25,7 @@ func TestEmbed_Success(t *testing.T) {
 		if r.URL.Path != "/api/embeddings" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(embedResponse{Embedding: want})
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: want})
 	}))
 	defer srv.Close()
 
@@ -54,7 +54,7 @@ func TestEmbed_HTTP500RetrySucceeds(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(embedResponse{Embedding: want})
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: want})
 	}))
 	defer srv.Close()
 
@@ -87,7 +87,7 @@ func TestEmbed_AllRetriesExhausted(t *testing.T) {
 
 func TestEmbed_EmptyEmbedding(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(embedResponse{Embedding: nil})
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: nil})
 	}))
 	defer srv.Close()
 
@@ -112,11 +112,11 @@ func TestEmbed_MalformedJSON(t *testing.T) {
 func TestEmbed_TextTruncation(t *testing.T) {
 	var receivedLen int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req embedRequest
+		var req ollamaEmbedRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		receivedLen = len(req.Prompt)
 		emb := make([]float32, 768)
-		_ = json.NewEncoder(w).Encode(embedResponse{Embedding: emb})
+		_ = json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: emb})
 	}))
 	defer srv.Close()
 
@@ -127,5 +127,43 @@ func TestEmbed_TextTruncation(t *testing.T) {
 	}
 	if receivedLen != 8000 {
 		t.Errorf("expected truncation to 8000 chars, server received %d", receivedLen)
+	}
+}
+
+func TestEmbed_OpenAIFormat(t *testing.T) {
+	want := []float32{0.1, 0.2, 0.3}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("missing auth header")
+		}
+		var req openAIEmbedRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Input == "" {
+			t.Errorf("input field not set")
+		}
+		resp := openAIEmbedResponse{Data: []struct {
+			Embedding []float32 `json:"embedding"`
+		}{{Embedding: want}}}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewClientWithConfig(Config{Model: "text-embedding-3-small", BaseURL: srv.URL, APIKey: "test-key"})
+	c.client = srv.Client()
+
+	got, err := c.Embed("test input")
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d dims, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("embedding[%d] = %v, want %v", i, got[i], want[i])
+		}
 	}
 }
