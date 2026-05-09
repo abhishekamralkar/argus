@@ -196,6 +196,99 @@ func TestWriteSARIF_SeverityLevels(t *testing.T) {
 	}
 }
 
+// ── CycloneDX ────────────────────────────────────────────────────────────────
+
+func TestWriteCycloneDX_Structure(t *testing.T) {
+	results := []rag.Result{
+		makeResult("example.com/foo", "1.2.3", "go", "HIGH", []store.SearchResult{
+			{ID: "GO-2024-0001", Severity: "HIGH", FixedIn: "1.3.0", Content: "heap overflow"},
+		}),
+		makeResult("requests", "2.28.0", "python", "", nil),
+	}
+
+	var buf bytes.Buffer
+	if err := WriteCycloneDX(&buf, results); err != nil {
+		t.Fatalf("WriteCycloneDX: %v", err)
+	}
+
+	var bom cdxBOM
+	if err := json.Unmarshal(buf.Bytes(), &bom); err != nil {
+		t.Fatalf("CycloneDX output is not valid JSON: %v\n%s", err, buf.String())
+	}
+	if bom.BOMFormat != "CycloneDX" {
+		t.Errorf("bomFormat = %q, want CycloneDX", bom.BOMFormat)
+	}
+	if bom.SpecVersion != "1.6" {
+		t.Errorf("specVersion = %q, want 1.6", bom.SpecVersion)
+	}
+	if len(bom.Components) != 2 {
+		t.Fatalf("expected 2 components, got %d", len(bom.Components))
+	}
+	if len(bom.Vulnerabilities) != 1 {
+		t.Fatalf("expected 1 vulnerability, got %d", len(bom.Vulnerabilities))
+	}
+	v := bom.Vulnerabilities[0]
+	if v.ID != "GO-2024-0001" {
+		t.Errorf("vulnerability id = %q, want GO-2024-0001", v.ID)
+	}
+	if v.Recommendation == "" {
+		t.Error("recommendation should be set when FixedIn is non-empty")
+	}
+}
+
+func TestDepPURL(t *testing.T) {
+	cases := []struct{ eco, name, version, want string }{
+		{"go", "github.com/foo/bar", "1.0.0", "pkg:golang/github.com/foo/bar@1.0.0"},
+		{"python", "requests", "2.28.0", "pkg:pypi/requests@2.28.0"},
+		{"rust", "serde", "1.0.0", "pkg:cargo/serde@1.0.0"},
+		{"npm", "express", "4.18.2", "pkg:npm/express@4.18.2"},
+		{"other", "tool", "1.0", "pkg:generic/tool@1.0"},
+	}
+	for _, c := range cases {
+		got := depPURL(c.eco, c.name, c.version)
+		if got != c.want {
+			t.Errorf("depPURL(%q,%q,%q) = %q, want %q", c.eco, c.name, c.version, got, c.want)
+		}
+	}
+}
+
+// ── SPDX ──────────────────────────────────────────────────────────────────────
+
+func TestWriteSPDX_Structure(t *testing.T) {
+	results := []rag.Result{
+		makeResult("express", "4.18.2", "npm", "HIGH", []store.SearchResult{
+			{ID: "CVE-2024-1234", Severity: "HIGH", FixedIn: "4.19.0"},
+		}),
+	}
+
+	var buf bytes.Buffer
+	if err := WriteSPDX(&buf, results, "my-project"); err != nil {
+		t.Fatalf("WriteSPDX: %v", err)
+	}
+
+	var doc spdxDocument
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("SPDX output is not valid JSON: %v\n%s", err, buf.String())
+	}
+	if doc.SPDXVersion != "SPDX-2.3" {
+		t.Errorf("spdxVersion = %q, want SPDX-2.3", doc.SPDXVersion)
+	}
+	if doc.Name != "my-project" {
+		t.Errorf("name = %q, want my-project", doc.Name)
+	}
+	if len(doc.Packages) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(doc.Packages))
+	}
+	pkg := doc.Packages[0]
+	if pkg.Name != "express" {
+		t.Errorf("package name = %q, want express", pkg.Name)
+	}
+	// Should have PURL ref + 1 security advisory ref
+	if len(pkg.ExternalRefs) < 2 {
+		t.Errorf("expected at least 2 external refs, got %d", len(pkg.ExternalRefs))
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func TestTruncate(t *testing.T) {

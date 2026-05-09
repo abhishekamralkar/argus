@@ -223,6 +223,8 @@ func depFile(ecosystem string) string {
 		return "requirements.txt"
 	case "rust":
 		return "Cargo.toml"
+	case "npm":
+		return "package.json"
 	default:
 		return "dependencies"
 	}
