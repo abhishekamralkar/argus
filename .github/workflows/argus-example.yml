@@ -1,0 +1,54 @@
+# Example: use this workflow as a template in your own repository.
+# Copy it to .github/workflows/argus.yml and adjust as needed.
+name: Argus Security Scan (example)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"  # weekly on Monday
+
+jobs:
+  argus:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # required for SARIF upload
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Option A: use Ollama locally (free, no API key needed).
+      # Start Ollama as a background service and pull models.
+      - name: Start Ollama
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull nomic-embed-text
+          ollama pull gpt-oss:20b
+
+      - name: Run Argus
+        uses: abhishekamralkar/argus@main
+        with:
+          ecosystems: "go"          # ingest Go vulnerability database
+          project-dir: "."
+          fail-on: "HIGH"
+          output-format: "sarif"
+          upload-sarif: "true"
+
+      # Option B: use OpenAI-compatible API (no local Ollama needed).
+      # Uncomment and remove the Ollama steps above.
+      # - name: Run Argus (OpenAI)
+      #   uses: abhishekamralkar/argus@main
+      #   env:
+      #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      #   with:
+      #     ecosystems: "go"
+      #     project-dir: "."
+      #     llm-model: "gpt-4o-mini"
+      #     embed-model: "text-embedding-3-small"
+      #     fail-on: "HIGH"
