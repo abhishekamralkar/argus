@@ -494,6 +494,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var failOn string
 	var timeoutMin int
 	var similarityThreshold float64
+	var topK int
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -528,6 +529,9 @@ func scanCmd(dbPath *string) *cobra.Command {
 			if workers == 4 && cfg.Workers > 0 {
 				workers = cfg.Workers
 			}
+			if topK == 0 && cfg.TopK > 0 {
+				topK = cfg.TopK
+			}
 			if llmBaseURL == "" {
 				llmBaseURL = cfg.LLMBaseURL
 			}
@@ -552,6 +556,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				EnhanceQuery:        enhanceQuery,
 				MinSeverity:         minSeverity,
 				SimilarityThreshold: similarityThreshold,
+				TopK:                topK,
 				IgnoreList:          ignoreList,
 			})
 
@@ -603,6 +608,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
+	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
 	return cmd
 }
 
