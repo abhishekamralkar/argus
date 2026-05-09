@@ -20,6 +20,8 @@ type Config struct {
 	ChunkSize    int    `yaml:"chunk_size"`
 	ChunkOverlap int    `yaml:"chunk_overlap"`
 	TopK         int    `yaml:"top_k"`
+	LLMBaseURL   string `yaml:"llm_base_url"`
+	EmbedBaseURL string `yaml:"embed_base_url"`
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}

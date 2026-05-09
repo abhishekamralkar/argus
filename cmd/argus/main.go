@@ -485,6 +485,8 @@ func ingestSourceChunked(
 func scanCmd(dbPath *string) *cobra.Command {
 	var llmModel string
 	var embedModel string
+	var llmBaseURL string
+	var embedBaseURL string
 	var outputFmt string
 	var enhanceQuery bool
 	var workers int
@@ -530,6 +532,12 @@ func scanCmd(dbPath *string) *cobra.Command {
 			if topK == 0 && cfg.TopK > 0 {
 				topK = cfg.TopK
 			}
+			if llmBaseURL == "" {
+				llmBaseURL = cfg.LLMBaseURL
+			}
+			if embedBaseURL == "" {
+				embedBaseURL = cfg.EmbedBaseURL
+			}
 
 			db, err := store.Open(*dbPath)
 			if err != nil {
@@ -542,8 +550,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return fmt.Errorf("load ignore list: %w", err)
 			}
 
-			embedder := embed.NewClient(embedModel)
-			generator := llm.NewClient(llmModel)
+			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
+			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
 			engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
 				EnhanceQuery:        enhanceQuery,
 				MinSeverity:         minSeverity,
@@ -589,8 +597,10 @@ func scanCmd(dbPath *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Ollama LLM model (default: gpt-oss:20b)")
-	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
+	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model name (Ollama default: gpt-oss:20b; OpenAI default: gpt-4o-mini)")
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", "embedding model name (Ollama default: nomic-embed-text; OpenAI default: text-embedding-3-small)")
+	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
+	cmd.Flags().StringVar(&embedBaseURL, "embed-base-url", "", "embedding API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
 	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, or sarif")
 	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")

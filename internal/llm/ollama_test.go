@@ -10,7 +10,7 @@ import (
 
 func newTestClient(srv *httptest.Server) *Client {
 	c := NewClient("")
-	c.host = srv.URL
+	c.baseURL = srv.URL
 	c.client = srv.Client()
 	return c
 }
@@ -18,7 +18,7 @@ func newTestClient(srv *httptest.Server) *Client {
 func writeChunks(w http.ResponseWriter, tokens []string) {
 	for i, tok := range tokens {
 		done := i == len(tokens)-1
-		chunk := generateChunk{Response: tok, Done: done}
+		chunk := ollamaGenerateChunk{Response: tok, Done: done}
 		b, _ := json.Marshal(chunk)
 		_, _ = w.Write(b)
 		_, _ = w.Write([]byte("\n"))
@@ -100,7 +100,7 @@ func TestGenerate_MalformedChunksSkipped(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// First line is garbage, second is valid.
 		_, _ = w.Write([]byte("not-json\n"))
-		b, _ := json.Marshal(generateChunk{Response: "good", Done: true})
+		b, _ := json.Marshal(ollamaGenerateChunk{Response: "good", Done: true})
 		_, _ = w.Write(b)
 		_, _ = w.Write([]byte("\n"))
 	}))
@@ -127,5 +127,36 @@ func TestGenerate_EmptyStream(t *testing.T) {
 	}
 	if sb.String() != "" {
 		t.Errorf("expected empty output, got %q", sb.String())
+	}
+}
+
+func TestGenerate_OpenAIFormat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("missing auth header")
+		}
+		chunks := []string{
+			`data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}`,
+			`data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}`,
+			`data: [DONE]`,
+		}
+		for _, c := range chunks {
+			_, _ = w.Write([]byte(c + "\n"))
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClientWithConfig(Config{Model: "gpt-4o", BaseURL: srv.URL, APIKey: "test-key"})
+	c.client = srv.Client()
+
+	var sb strings.Builder
+	if err := c.Generate("prompt", &sb); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if sb.String() != "hello world" {
+		t.Errorf("got %q, want %q", sb.String(), "hello world")
 	}
 }
