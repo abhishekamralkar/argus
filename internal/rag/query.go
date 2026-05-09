@@ -21,12 +21,17 @@ import (
 
 var severityOrder = map[string]int{"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
+// DefaultTopK is the number of vector search candidates retrieved per dependency.
+const DefaultTopK = 10
+
 // EngineConfig holds optional settings for the RAG engine.
-// Zero values are safe: similarity threshold defaults to store.DefaultSimilarityThreshold.
+// Zero values are safe: similarity threshold defaults to store.DefaultSimilarityThreshold,
+// TopK defaults to DefaultTopK.
 type EngineConfig struct {
 	EnhanceQuery        bool
 	MinSeverity         string
 	SimilarityThreshold float64
+	TopK                int
 	IgnoreList          *ignore.List
 }
 
@@ -38,10 +43,13 @@ type Engine struct {
 }
 
 // NewEngine constructs an Engine. If cfg.SimilarityThreshold is zero the
-// store default (0.5) is used.
+// store default (0.5) is used. If cfg.TopK is zero, DefaultTopK is used.
 func NewEngine(db *store.DB, embedder *embed.Client, generator *llm.Client, cfg EngineConfig) *Engine {
 	if cfg.SimilarityThreshold == 0 {
 		cfg.SimilarityThreshold = store.DefaultSimilarityThreshold
+	}
+	if cfg.TopK == 0 {
+		cfg.TopK = DefaultTopK
 	}
 	return &Engine{
 		db:        db,
@@ -113,7 +121,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 		return result, nil
 	}
 
-	hits, err := e.db.SearchBest(ctx, dep.Ecosystem, vec, 10, e.cfg.SimilarityThreshold)
+	hits, err := e.db.SearchBest(ctx, dep.Ecosystem, vec, e.cfg.TopK, e.cfg.SimilarityThreshold)
 	if err != nil {
 		result.Err = fmt.Errorf("vector search: %w", err)
 		return result, nil

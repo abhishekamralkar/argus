@@ -198,7 +198,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			return errors.Join(errs...)
 		},
 	}
-	cmd.Flags().StringVar(&ecosystems, "ecosystems", "go,python,rust", "comma-separated ecosystems to ingest")
+	cmd.Flags().StringVar(&ecosystems, "ecosystems", "go,python,rust", "comma-separated ecosystems to ingest (go, python, rust, npm)")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&workers, "workers", 8, "parallel embedding workers")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", true, "skip vulnerabilities already in the database")
@@ -235,8 +235,12 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosys
 			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", fn) }},
 			{"RustSec", ingest.LoadRustSec},
 		}
+	case "npm":
+		sources = []source{
+			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", fn) }},
+		}
 	default:
-		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust)", ecosystem)
+		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm)", ecosystem)
 	}
 
 	var errs []error
@@ -485,6 +489,8 @@ func ingestSourceChunked(
 func scanCmd(dbPath *string) *cobra.Command {
 	var llmModel string
 	var embedModel string
+	var llmBaseURL string
+	var embedBaseURL string
 	var outputFmt string
 	var enhanceQuery bool
 	var workers int
@@ -492,6 +498,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var failOn string
 	var timeoutMin int
 	var similarityThreshold float64
+	var topK int
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -526,6 +533,15 @@ func scanCmd(dbPath *string) *cobra.Command {
 			if workers == 4 && cfg.Workers > 0 {
 				workers = cfg.Workers
 			}
+			if topK == 0 && cfg.TopK > 0 {
+				topK = cfg.TopK
+			}
+			if llmBaseURL == "" {
+				llmBaseURL = cfg.LLMBaseURL
+			}
+			if embedBaseURL == "" {
+				embedBaseURL = cfg.EmbedBaseURL
+			}
 
 			db, err := store.Open(*dbPath)
 			if err != nil {
@@ -538,12 +554,13 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return fmt.Errorf("load ignore list: %w", err)
 			}
 
-			embedder := embed.NewClient(embedModel)
-			generator := llm.NewClient(llmModel)
+			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
+			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
 			engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
 				EnhanceQuery:        enhanceQuery,
 				MinSeverity:         minSeverity,
 				SimilarityThreshold: similarityThreshold,
+				TopK:                topK,
 				IgnoreList:          ignoreList,
 			})
 
@@ -552,7 +569,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 			if len(deps) == 0 {
-				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml).")
+				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml, package.json, package-lock.json).")
 				return nil
 			}
 
@@ -588,8 +605,10 @@ func scanCmd(dbPath *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Ollama LLM model (default: gpt-oss:20b)")
-	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
+	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model name (Ollama default: gpt-oss:20b; OpenAI default: gpt-4o-mini)")
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", "embedding model name (Ollama default: nomic-embed-text; OpenAI default: text-embedding-3-small)")
+	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
+	cmd.Flags().StringVar(&embedBaseURL, "embed-base-url", "", "embedding API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
 	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, sarif, cyclonedx, or spdx")
 	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
@@ -597,6 +616,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
+	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
 	return cmd
 }
 
@@ -683,6 +703,23 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 			continue
 		}
 		all = append(all, deps...)
+	}
+
+	// npm: prefer package-lock.json (exact resolved versions); fall back to package.json.
+	lockPath := filepath.Join(dir, "package-lock.json")
+	pkgPath := filepath.Join(dir, "package.json")
+	if _, err := os.Stat(lockPath); err == nil {
+		if deps, err := parser.ParsePackageLockJSON(lockPath); err == nil {
+			all = append(all, deps...)
+		} else {
+			fmt.Fprintf(os.Stderr, "parse package-lock.json: %v\n", err)
+		}
+	} else if _, err := os.Stat(pkgPath); err == nil {
+		if deps, err := parser.ParsePackageJSON(pkgPath); err == nil {
+			all = append(all, deps...)
+		} else {
+			fmt.Fprintf(os.Stderr, "parse package.json: %v\n", err)
+		}
 	}
 	return all, nil
 }
