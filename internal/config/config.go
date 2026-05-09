@@ -19,6 +19,9 @@ type Config struct {
 	Ecosystems   string `yaml:"ecosystems"`
 	ChunkSize    int    `yaml:"chunk_size"`
 	ChunkOverlap int    `yaml:"chunk_overlap"`
+	TopK         int    `yaml:"top_k"`
+	LLMBaseURL   string `yaml:"llm_base_url"`
+	EmbedBaseURL string `yaml:"embed_base_url"`
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
@@ -48,6 +51,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ChunkSize > 0 && c.ChunkOverlap >= c.ChunkSize {
 		return fmt.Errorf("chunk_overlap must be < chunk_size, got %d >= %d", c.ChunkOverlap, c.ChunkSize)
+	}
+	if c.TopK < 0 {
+		return fmt.Errorf("top_k must be >= 0, got %d", c.TopK)
 	}
 	return nil
 }

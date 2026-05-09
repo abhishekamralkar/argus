@@ -89,6 +89,20 @@ func TestNewEngine_CustomThreshold(t *testing.T) {
 	}
 }
 
+func TestNewEngine_DefaultTopK(t *testing.T) {
+	e := NewEngine(nil, nil, nil, EngineConfig{})
+	if e.cfg.TopK != DefaultTopK {
+		t.Errorf("default TopK = %v, want %v", e.cfg.TopK, DefaultTopK)
+	}
+}
+
+func TestNewEngine_CustomTopK(t *testing.T) {
+	e := NewEngine(nil, nil, nil, EngineConfig{TopK: 25})
+	if e.cfg.TopK != 25 {
+		t.Errorf("TopK = %v, want 25", e.cfg.TopK)
+	}
+}
+
 func TestPackageMatches(t *testing.T) {
 	cases := []struct {
 		vulnPkg string
