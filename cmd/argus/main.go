@@ -235,8 +235,16 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosys
 			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", fn) }},
 			{"RustSec", ingest.LoadRustSec},
 		}
+	case "maven":
+		sources = []source{
+			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Maven", fn) }},
+		}
+	case "nuget":
+		sources = []source{
+			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", fn) }},
+		}
 	default:
-		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust)", ecosystem)
+		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, maven, nuget)", ecosystem)
 	}
 
 	var errs []error
@@ -552,7 +560,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 			if len(deps) == 0 {
-				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml).")
+				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml, pom.xml, *.csproj, packages.config).")
 				return nil
 			}
 
@@ -666,6 +674,8 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 		{"go.mod", parser.ParseGoMod},
 		{"requirements.txt", parser.ParseRequirements},
 		{"Cargo.toml", parser.ParseCargoToml},
+		{"pom.xml", parser.ParsePomXML},
+		{"packages.config", parser.ParsePackagesConfig},
 	}
 
 	for _, c := range candidates {
@@ -680,6 +690,20 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 		}
 		all = append(all, deps...)
 	}
+
+	// .csproj files: glob for them in the project root.
+	csprojMatches, err := filepath.Glob(filepath.Join(dir, "*.csproj"))
+	if err == nil {
+		for _, path := range csprojMatches {
+			deps, err := parser.ParseCsproj(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "parse %s: %v\n", filepath.Base(path), err)
+				continue
+			}
+			all = append(all, deps...)
+		}
+	}
+
 	return all, nil
 }
 
