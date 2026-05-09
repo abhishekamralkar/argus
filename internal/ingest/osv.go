@@ -17,6 +17,8 @@ var osvEcosystems = map[string]string{
 	"PyPI":      "python",
 	"crates.io": "rust",
 	"npm":       "npm",
+	"Maven":     "maven",
+	"NuGet":     "nuget",
 }
 
 // OSV download URLs per ecosystem
@@ -25,6 +27,8 @@ var osvURLs = map[string]string{
 	"PyPI":      "https://osv-vulnerabilities.storage.googleapis.com/PyPI/all.zip",
 	"crates.io": "https://osv-vulnerabilities.storage.googleapis.com/crates.io/all.zip",
 	"npm":       "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip",
+	"Maven":     "https://osv-vulnerabilities.storage.googleapis.com/Maven/all.zip",
+	"NuGet":     "https://osv-vulnerabilities.storage.googleapis.com/NuGet/all.zip",
 }
 
 type osvRecord struct {

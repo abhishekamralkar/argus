@@ -239,8 +239,16 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosys
 		sources = []source{
 			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", fn) }},
 		}
+	case "maven":
+		sources = []source{
+			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Maven", fn) }},
+		}
+	case "nuget":
+		sources = []source{
+			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", fn) }},
+		}
 	default:
-		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm)", ecosystem)
+		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm, maven, nuget)", ecosystem)
 	}
 
 	var errs []error
@@ -569,7 +577,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 			if len(deps) == 0 {
-				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml, package.json, package-lock.json).")
+				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml, package.json, package-lock.json, pom.xml, *.csproj, packages.config).")
 				return nil
 			}
 
@@ -690,6 +698,8 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 		{"go.mod", parser.ParseGoMod},
 		{"requirements.txt", parser.ParseRequirements},
 		{"Cargo.toml", parser.ParseCargoToml},
+		{"pom.xml", parser.ParsePomXML},
+		{"packages.config", parser.ParsePackagesConfig},
 	}
 
 	for _, c := range candidates {
@@ -721,6 +731,20 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 			fmt.Fprintf(os.Stderr, "parse package.json: %v\n", err)
 		}
 	}
+
+	// .csproj files: glob for them in the project root.
+	csprojMatches, err := filepath.Glob(filepath.Join(dir, "*.csproj"))
+	if err == nil {
+		for _, path := range csprojMatches {
+			deps, err := parser.ParseCsproj(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "parse %s: %v\n", filepath.Base(path), err)
+				continue
+			}
+			all = append(all, deps...)
+		}
+	}
+
 	return all, nil
 }
 

@@ -25,7 +25,7 @@ type Config struct {
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
-var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true, "npm": true}
+var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true, "npm": true, "maven": true, "nuget": true}
 
 // Validate checks field bounds and known enum values.
 func (c *Config) Validate() error {
@@ -39,7 +39,7 @@ func (c *Config) Validate() error {
 		for eco := range strings.SplitSeq(c.Ecosystems, ",") {
 			eco = strings.TrimSpace(eco)
 			if eco != "" && !validEcosystems[eco] {
-				return fmt.Errorf("unknown ecosystem %q (valid: go, python, rust)", eco)
+				return fmt.Errorf("unknown ecosystem %q (valid: go, python, rust, maven, nuget)", eco)
 			}
 		}
 	}
