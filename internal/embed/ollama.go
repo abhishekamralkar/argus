@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultModel      = "nomic-embed-text"
+	defaultModel       = "nomic-embed-text"
 	defaultOpenAIModel = "text-embedding-3-small"
 )
 

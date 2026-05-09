@@ -16,8 +16,8 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
-	col "github.com/abhishekamralkar/argus/internal/color"
 	"github.com/abhishekamralkar/argus/internal/baseline"
+	col "github.com/abhishekamralkar/argus/internal/color"
 	"github.com/abhishekamralkar/argus/internal/config"
 	"github.com/abhishekamralkar/argus/internal/embed"
 	"github.com/abhishekamralkar/argus/internal/ignore"

@@ -216,11 +216,11 @@ func TestParsePackageJSON(t *testing.T) {
 	byName := index(deps)
 
 	cases := []struct{ name, version string }{
-		{"express", "4.18.2"},   // ^ stripped
-		{"lodash", "4.17.21"},   // ~ stripped
-		{"axios", "1.4.0"},      // >= stripped
-		{"jest", "29.0.0"},      // ^ stripped (devDep)
-		{"eslint", "8.0.0"},     // exact (devDep)
+		{"express", "4.18.2"}, // ^ stripped
+		{"lodash", "4.17.21"}, // ~ stripped
+		{"axios", "1.4.0"},    // >= stripped
+		{"jest", "29.0.0"},    // ^ stripped (devDep)
+		{"eslint", "8.0.0"},   // exact (devDep)
 	}
 	for _, c := range cases {
 		d, ok := byName[c.name]

@@ -22,14 +22,14 @@ func WriteSPDX(w io.Writer, results []rag.Result, projectName string) error {
 }
 
 type spdxDocument struct {
-	SPDXVersion     string         `json:"spdxVersion"`
-	DataLicense     string         `json:"dataLicense"`
-	SPDXID          string         `json:"SPDXID"`
-	Name            string         `json:"name"`
-	DocumentNamespace string       `json:"documentNamespace"`
-	CreationInfo    spdxCreation   `json:"creationInfo"`
-	Packages        []spdxPackage  `json:"packages"`
-	Relationships   []spdxRelation `json:"relationships"`
+	SPDXVersion       string         `json:"spdxVersion"`
+	DataLicense       string         `json:"dataLicense"`
+	SPDXID            string         `json:"SPDXID"`
+	Name              string         `json:"name"`
+	DocumentNamespace string         `json:"documentNamespace"`
+	CreationInfo      spdxCreation   `json:"creationInfo"`
+	Packages          []spdxPackage  `json:"packages"`
+	Relationships     []spdxRelation `json:"relationships"`
 }
 
 type spdxCreation struct {
@@ -38,12 +38,12 @@ type spdxCreation struct {
 }
 
 type spdxPackage struct {
-	SPDXID           string              `json:"SPDXID"`
-	Name             string              `json:"name"`
-	Version          string              `json:"versionInfo,omitempty"`
-	DownloadLocation string              `json:"downloadLocation"`
-	FilesAnalyzed    bool                `json:"filesAnalyzed"`
-	ExternalRefs     []spdxExternalRef   `json:"externalRefs,omitempty"`
+	SPDXID           string            `json:"SPDXID"`
+	Name             string            `json:"name"`
+	Version          string            `json:"versionInfo,omitempty"`
+	DownloadLocation string            `json:"downloadLocation"`
+	FilesAnalyzed    bool              `json:"filesAnalyzed"`
+	ExternalRefs     []spdxExternalRef `json:"externalRefs,omitempty"`
 }
 
 type spdxExternalRef struct {

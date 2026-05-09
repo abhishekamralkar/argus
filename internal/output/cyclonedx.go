@@ -20,18 +20,18 @@ func WriteCycloneDX(w io.Writer, results []rag.Result) error {
 }
 
 type cdxBOM struct {
-	BOMFormat      string          `json:"bomFormat"`
-	SpecVersion    string          `json:"specVersion"`
-	Version        int             `json:"version"`
-	SerialNumber   string          `json:"serialNumber"`
-	Metadata       cdxMetadata     `json:"metadata"`
-	Components     []cdxComponent  `json:"components"`
+	BOMFormat       string         `json:"bomFormat"`
+	SpecVersion     string         `json:"specVersion"`
+	Version         int            `json:"version"`
+	SerialNumber    string         `json:"serialNumber"`
+	Metadata        cdxMetadata    `json:"metadata"`
+	Components      []cdxComponent `json:"components"`
 	Vulnerabilities []cdxVuln      `json:"vulnerabilities,omitempty"`
 }
 
 type cdxMetadata struct {
-	Timestamp string       `json:"timestamp"`
-	Tools     []cdxTool    `json:"tools"`
+	Timestamp string    `json:"timestamp"`
+	Tools     []cdxTool `json:"tools"`
 }
 
 type cdxTool struct {
@@ -48,13 +48,13 @@ type cdxComponent struct {
 }
 
 type cdxVuln struct {
-	BOMRef  string       `json:"bom-ref"`
-	ID      string       `json:"id"`
-	Source  cdxSource    `json:"source"`
-	Ratings []cdxRating  `json:"ratings,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Recommendation string `json:"recommendation,omitempty"`
-	Affects []cdxAffects `json:"affects"`
+	BOMRef         string       `json:"bom-ref"`
+	ID             string       `json:"id"`
+	Source         cdxSource    `json:"source"`
+	Ratings        []cdxRating  `json:"ratings,omitempty"`
+	Description    string       `json:"description,omitempty"`
+	Recommendation string       `json:"recommendation,omitempty"`
+	Affects        []cdxAffects `json:"affects"`
 }
 
 type cdxSource struct {

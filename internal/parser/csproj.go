@@ -25,7 +25,7 @@ type csprojPkgRef struct {
 
 // packagesConfig covers the legacy packages.config format.
 type packagesConfig struct {
-	XMLName  xml.Name      `xml:"packages"`
+	XMLName  xml.Name       `xml:"packages"`
 	Packages []nugetPackage `xml:"package"`
 }
 

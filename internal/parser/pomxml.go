@@ -7,7 +7,7 @@ import (
 )
 
 type pomProject struct {
-	XMLName      xml.Name       `xml:"project"`
+	XMLName      xml.Name        `xml:"project"`
 	Dependencies []pomDependency `xml:"dependencies>dependency"`
 	// Also check dependencyManagement section
 	ManagedDeps []pomDependency `xml:"dependencyManagement>dependencies>dependency"`
