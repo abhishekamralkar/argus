@@ -198,7 +198,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			return errors.Join(errs...)
 		},
 	}
-	cmd.Flags().StringVar(&ecosystems, "ecosystems", "go,python,rust", "comma-separated ecosystems to ingest")
+	cmd.Flags().StringVar(&ecosystems, "ecosystems", "go,python,rust", "comma-separated ecosystems to ingest (go, python, rust, npm)")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&workers, "workers", 8, "parallel embedding workers")
 	cmd.Flags().BoolVar(&skipExisting, "skip-existing", true, "skip vulnerabilities already in the database")
@@ -235,8 +235,12 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosys
 			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", fn) }},
 			{"RustSec", ingest.LoadRustSec},
 		}
+	case "npm":
+		sources = []source{
+			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", fn) }},
+		}
 	default:
-		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust)", ecosystem)
+		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm)", ecosystem)
 	}
 
 	var errs []error
@@ -565,7 +569,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 			if len(deps) == 0 {
-				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml).")
+				fmt.Println("No dependency files found (go.mod, requirements.txt, Cargo.toml, package.json, package-lock.json).")
 				return nil
 			}
 
@@ -695,6 +699,23 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 			continue
 		}
 		all = append(all, deps...)
+	}
+
+	// npm: prefer package-lock.json (exact resolved versions); fall back to package.json.
+	lockPath := filepath.Join(dir, "package-lock.json")
+	pkgPath := filepath.Join(dir, "package.json")
+	if _, err := os.Stat(lockPath); err == nil {
+		if deps, err := parser.ParsePackageLockJSON(lockPath); err == nil {
+			all = append(all, deps...)
+		} else {
+			fmt.Fprintf(os.Stderr, "parse package-lock.json: %v\n", err)
+		}
+	} else if _, err := os.Stat(pkgPath); err == nil {
+		if deps, err := parser.ParsePackageJSON(pkgPath); err == nil {
+			all = append(all, deps...)
+		} else {
+			fmt.Fprintf(os.Stderr, "parse package.json: %v\n", err)
+		}
 	}
 	return all, nil
 }
