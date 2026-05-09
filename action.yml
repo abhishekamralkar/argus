@@ -1,0 +1,146 @@
+name: "Argus Vulnerability Scanner"
+description: "RAG-powered local vulnerability scanner for Go, Python, Rust, and npm projects"
+author: "Abhishek Amralkar"
+
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  version:
+    description: "Argus version to use (e.g. v0.3.0). Defaults to latest release."
+    required: false
+    default: "latest"
+
+  project-dir:
+    description: "Directory containing the project to scan (go.mod, requirements.txt, Cargo.toml, package.json)."
+    required: false
+    default: "."
+
+  db-path:
+    description: "Path to the DuckDB vulnerability database file."
+    required: false
+    default: "/tmp/argus-vulns.db"
+
+  ollama-host:
+    description: "Ollama server URL. Ignored when OPENAI_API_KEY is set."
+    required: false
+    default: "http://localhost:11434"
+
+  llm-model:
+    description: "LLM model name."
+    required: false
+    default: ""
+
+  embed-model:
+    description: "Embedding model name."
+    required: false
+    default: ""
+
+  min-severity:
+    description: "Minimum severity to report (LOW, MEDIUM, HIGH, CRITICAL)."
+    required: false
+    default: ""
+
+  fail-on:
+    description: "Severity that causes a non-zero exit code (LOW, MEDIUM, HIGH, CRITICAL)."
+    required: false
+    default: "HIGH"
+
+  output-format:
+    description: "Output format: text, json, or sarif."
+    required: false
+    default: "sarif"
+
+  upload-sarif:
+    description: "Upload SARIF results to GitHub Security tab (requires output-format: sarif)."
+    required: false
+    default: "true"
+
+  ecosystems:
+    description: "Comma-separated ecosystems to ingest before scanning (go, python, rust, npm). Leave empty to skip ingest (use a cached db)."
+    required: false
+    default: ""
+
+outputs:
+  sarif-file:
+    description: "Path to the generated SARIF file (when output-format is sarif)."
+    value: ${{ steps.scan.outputs.sarif-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install argus
+      shell: bash
+      env:
+        ARGUS_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64)  ARCH=amd64 ;;
+          aarch64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+        esac
+
+        if [ "$ARGUS_VERSION" = "latest" ]; then
+          ARGUS_VERSION=$(curl -fsSL https://api.github.com/repos/abhishekamralkar/argus/releases/latest \
+            | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+        else
+          ARGUS_VERSION="${ARGUS_VERSION#v}"
+        fi
+
+        URL="https://github.com/abhishekamralkar/argus/releases/download/v${ARGUS_VERSION}/argus_${ARGUS_VERSION}_linux_${ARCH}.tar.gz"
+        echo "Downloading argus v${ARGUS_VERSION} (${ARCH}) from ${URL}"
+        curl -fsSL "$URL" | tar -xz -C /usr/local/bin argus
+        chmod +x /usr/local/bin/argus
+        argus version
+
+    - name: Ingest vulnerability databases
+      if: inputs.ecosystems != ''
+      shell: bash
+      env:
+        OLLAMA_HOST: ${{ inputs.ollama-host }}
+      run: |
+        argus ingest \
+          --db "${{ inputs.db-path }}" \
+          --ecosystems "${{ inputs.ecosystems }}" \
+          --quiet
+
+    - name: Run argus scan
+      id: scan
+      shell: bash
+      env:
+        OLLAMA_HOST: ${{ inputs.ollama-host }}
+      run: |
+        SARIF_FILE="${{ runner.temp }}/argus-results.sarif"
+        EXTRA_FLAGS=""
+        [ -n "${{ inputs.llm-model }}" ]   && EXTRA_FLAGS="$EXTRA_FLAGS --llm-model ${{ inputs.llm-model }}"
+        [ -n "${{ inputs.embed-model }}" ] && EXTRA_FLAGS="$EXTRA_FLAGS --embed-model ${{ inputs.embed-model }}"
+        [ -n "${{ inputs.min-severity }}" ] && EXTRA_FLAGS="$EXTRA_FLAGS --min-severity ${{ inputs.min-severity }}"
+
+        if [ "${{ inputs.output-format }}" = "sarif" ]; then
+          argus scan \
+            --db "${{ inputs.db-path }}" \
+            --output sarif \
+            --fail-on "${{ inputs.fail-on }}" \
+            $EXTRA_FLAGS \
+            "${{ inputs.project-dir }}" > "$SARIF_FILE" || EXIT_CODE=$?
+          echo "sarif-file=${SARIF_FILE}" >> "$GITHUB_OUTPUT"
+        else
+          argus scan \
+            --db "${{ inputs.db-path }}" \
+            --output "${{ inputs.output-format }}" \
+            --fail-on "${{ inputs.fail-on }}" \
+            $EXTRA_FLAGS \
+            "${{ inputs.project-dir }}" || EXIT_CODE=$?
+        fi
+
+        exit ${EXIT_CODE:-0}
+
+    - name: Upload SARIF to GitHub Security tab
+      if: inputs.upload-sarif == 'true' && inputs.output-format == 'sarif' && always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif-file }}
+        category: argus
