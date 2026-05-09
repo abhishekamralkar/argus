@@ -572,6 +572,10 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return output.WriteJSON(os.Stdout, results)
 			case "sarif":
 				return output.WriteSARIF(os.Stdout, results, projectDir)
+			case "cyclonedx":
+				return output.WriteCycloneDX(os.Stdout, results)
+			case "spdx":
+				return output.WriteSPDX(os.Stdout, results, filepath.Base(projectDir))
 			default:
 				printSummaryTable(results)
 			}
@@ -586,7 +590,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Ollama LLM model (default: gpt-oss:20b)")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
-	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, or sarif")
+	cmd.Flags().StringVar(&outputFmt, "output", "text", "output format: text, json, sarif, cyclonedx, or spdx")
 	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL")
