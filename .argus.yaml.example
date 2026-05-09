@@ -7,8 +7,8 @@
 # Ollama embedding model (default: nomic-embed-text)
 # embed_model: nomic-embed-text
 
-# Ollama LLM model (default: gpt-oss:20b)
-# llm_model: gpt-oss:20b
+# Ollama LLM model (default: llama3.1:8b)
+# llm_model: llama3.1:8b
 
 # Minimum severity to report in scan output (default: all)
 # Options: LOW, MEDIUM, HIGH, CRITICAL

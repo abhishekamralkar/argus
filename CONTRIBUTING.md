@@ -14,7 +14,7 @@ make build
 
 # Pull Ollama models (needed for integration tests)
 ollama pull nomic-embed-text
-ollama pull gpt-oss:20b
+ollama pull llama3.1:8b
 
 # Run tests
 make test

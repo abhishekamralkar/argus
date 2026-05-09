@@ -17,7 +17,7 @@ go install github.com/abhishekamralkar/argus/cmd/argus@latest
 
 # 2. Start Ollama and pull models
 ollama pull nomic-embed-text
-ollama pull gpt-oss:20b
+ollama pull llama3.1:8b
 
 # 3. Ingest vulnerability databases (one-time, ~5–15 min)
 argus ingest --ecosystems go,python,rust,npm
@@ -105,7 +105,7 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 
 ```bash
 ollama pull nomic-embed-text   # embedding model (768-dim)
-ollama pull gpt-oss:20b        # LLM for vulnerability analysis
+ollama pull llama3.1:8b        # LLM for vulnerability analysis
 ```
 
 ---
@@ -240,7 +240,7 @@ argus scan /path/to/your/project
  ID             | PACKAGE              | SEVERITY | FIXED IN | SCORE
  GO-2021-0227   | golang.org/x/crypto  | HIGH     | 0.17.0   | 0.923
 
-  Analyzing with gpt-oss:20b (streaming)...
+  Analyzing with llama3.1:8b (streaming)...
   1. Vulnerable: YES
   2. Severity: HIGH
   3. Advisory: GO-2021-0227 (CVE-2021-43565)
@@ -282,7 +282,7 @@ argus scan . --output spdx > sbom.spdx.json
 | `--top-k` | `10` | Vector search candidates per dependency |
 | `--workers` | `4` | Parallel dependency analysis workers |
 | `--enhance-query` | off | Use LLM to expand search queries before embedding |
-| `--llm-model` | `gpt-oss:20b` | LLM model name |
+| `--llm-model` | `llama3.1:8b` | LLM model name |
 | `--embed-model` | `nomic-embed-text` | Embedding model name |
 | `--llm-base-url` | _(Ollama)_ | LLM API base URL — overrides `OPENAI_BASE_URL` / `OLLAMA_HOST` |
 | `--embed-base-url` | _(Ollama)_ | Embedding API base URL |
@@ -380,7 +380,7 @@ Place `.argus.yaml` in your project root to avoid repeating flags on every run. 
 min_severity: MEDIUM        # skip LOW findings
 workers: 8
 top_k: 15                   # more vector search candidates
-llm_model: gpt-oss:20b
+llm_model: llama3.1:8b
 embed_model: nomic-embed-text
 
 # OpenAI-compatible endpoint (optional)
@@ -437,7 +437,7 @@ See [`action.yml`](action.yml) and [`.github/workflows/argus-example.yml`](.gith
     curl -fsSL https://ollama.com/install.sh | sh
     ollama serve &
     ollama pull nomic-embed-text
-    ollama pull gpt-oss:20b
+    ollama pull llama3.1:8b
 
 - name: Cache vulnerability database
   uses: actions/cache@v4

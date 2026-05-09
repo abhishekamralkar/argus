@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultModel       = "gpt-oss:20b"
+	defaultModel       = "llama3.1:8b"
 	defaultOpenAIModel = "gpt-4o-mini"
 )
 

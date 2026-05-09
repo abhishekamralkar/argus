@@ -648,7 +648,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model name (Ollama default: gpt-oss:20b; OpenAI default: gpt-4o-mini)")
+	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model name (Ollama default: llama3.1:8b; OpenAI default: gpt-4o-mini)")
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "embedding model name (Ollama default: nomic-embed-text; OpenAI default: text-embedding-3-small)")
 	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
 	cmd.Flags().StringVar(&embedBaseURL, "embed-base-url", "", "embedding API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")

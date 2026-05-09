@@ -50,7 +50,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 **Core pipeline**
 - RAG-based vulnerability scanner for Go, Python, and Rust projects
-- Fully local — Ollama models (`nomic-embed-text`, `gpt-oss:20b`), DuckDB on disk
+- Fully local — Ollama models (`nomic-embed-text`, `llama3.1:8b`), DuckDB on disk
 - `argus ingest` — download and embed four vulnerability databases:
   - OSV (Go, PyPI, crates.io)
   - Go Vulnerability Database (`vuln.go.dev`)
