@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	col "github.com/abhishekamralkar/argus/internal/color"
+	"github.com/abhishekamralkar/argus/internal/baseline"
 	"github.com/abhishekamralkar/argus/internal/config"
 	"github.com/abhishekamralkar/argus/internal/embed"
 	"github.com/abhishekamralkar/argus/internal/ignore"
@@ -46,6 +47,7 @@ func main() {
 	root.AddCommand(scanCmd(&dbPath))
 	root.AddCommand(searchCmd(&dbPath))
 	root.AddCommand(statusCmd(&dbPath))
+	root.AddCommand(baselineCmd(&dbPath))
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -494,6 +496,8 @@ func ingestSourceChunked(
 
 // ── scan ─────────────────────────────────────────────────────────────────────
 
+var validBaselineModes = map[string]bool{"full": true, "diff": true, "update": true}
+
 func scanCmd(dbPath *string) *cobra.Command {
 	var llmModel string
 	var embedModel string
@@ -507,6 +511,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var timeoutMin int
 	var similarityThreshold float64
 	var topK int
+	var baselineMode string
 
 	cmd := &cobra.Command{
 		Use:   "scan <project-dir>",
@@ -519,6 +524,11 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return fmt.Errorf("--fail-on must be one of LOW, MEDIUM, HIGH, CRITICAL (got %q)", failOn)
 			}
 			failOn = strings.ToUpper(failOn)
+
+			baselineMode = strings.ToLower(baselineMode)
+			if !validBaselineModes[baselineMode] {
+				return fmt.Errorf("--baseline-mode must be one of full, diff, update (got %q)", baselineMode)
+			}
 
 			ctx := context.Background()
 			if timeoutMin > 0 {
@@ -584,13 +594,38 @@ func scanCmd(dbPath *string) *cobra.Command {
 			isText := outputFmt == "text"
 
 			if isText {
+				modeTag := ""
+				if baselineMode != "full" {
+					modeTag = " [baseline:" + baselineMode + "]"
+				}
 				fmt.Printf("\n╔══════════════════════════════════════════════════════╗\n")
 				fmt.Printf("║  argus scan: %-39s║\n", truncatePath(projectDir, 39))
 				fmt.Printf("║  %d dependencies found%-32s║\n", len(deps), "")
 				fmt.Printf("╚══════════════════════════════════════════════════════╝\n\n")
+				if modeTag != "" {
+					fmt.Printf("Mode: baseline %s — reporting only new findings.\n\n", baselineMode)
+				}
 			}
 
 			results := parallelScan(ctx, engine, deps, workers, isText)
+
+			// Apply baseline diff if requested.
+			projectKey := resolveProjectKey(projectDir)
+			if baselineMode == "diff" || baselineMode == "update" {
+				stored, err := db.LoadBaseline(ctx, projectKey)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not load baseline: %v\n", err)
+				} else {
+					results = baseline.DiffResults(results, stored)
+				}
+			}
+
+			// Persist updated baseline when requested.
+			if baselineMode == "update" {
+				if err := db.SaveBaseline(ctx, projectKey, baseline.ToEntries(results)); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not save baseline: %v\n", err)
+				}
+			}
 
 			switch outputFmt {
 			case "json":
@@ -625,7 +660,17 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
+	cmd.Flags().StringVar(&baselineMode, "baseline-mode", "full", "baseline mode: full (all findings), diff (new only), update (diff + save baseline)")
 	return cmd
+}
+
+// resolveProjectKey returns a stable key for the project directory.
+func resolveProjectKey(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return abs
 }
 
 var severityRank = map[string]int{"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4, "ERROR": 5}
@@ -746,6 +791,93 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 	}
 
 	return all, nil
+}
+
+// ── baseline ─────────────────────────────────────────────────────────────────
+
+func baselineCmd(dbPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "baseline <subcommand>",
+		Short: "Manage stored scan baselines",
+	}
+	cmd.AddCommand(baselineShowCmd(dbPath))
+	cmd.AddCommand(baselineResetCmd(dbPath))
+	return cmd
+}
+
+func baselineShowCmd(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <project-dir>",
+		Short: "Show the stored baseline for a project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			projectKey := resolveProjectKey(args[0])
+
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			entries, err := db.ListBaseline(ctx, projectKey)
+			if err != nil {
+				return fmt.Errorf("list baseline: %w", err)
+			}
+			if len(entries) == 0 {
+				fmt.Printf("No baseline stored for %s.\n", args[0])
+				fmt.Println("Run: argus scan --baseline-mode update <project-dir>")
+				return nil
+			}
+
+			fmt.Printf("\n%s\n\n", col.Bold("Stored baseline — %s", args[0]))
+			t := tablewriter.NewWriter(os.Stdout)
+			t.Header("Dependency", "Ecosystem", "CVEs in Baseline", "Last Scanned")
+			for _, e := range entries {
+				_ = t.Append([]string{
+					e.DepName,
+					e.Ecosystem,
+					fmt.Sprintf("%d", len(e.VulnIDs)),
+					e.ScannedAt.Format("2006-01-02 15:04 UTC"),
+				})
+			}
+			_ = t.Render()
+			fmt.Println()
+			return nil
+		},
+	}
+}
+
+func baselineResetCmd(dbPath *string) *cobra.Command {
+	var confirm bool
+	cmd := &cobra.Command{
+		Use:   "reset <project-dir>",
+		Short: "Clear the stored baseline for a project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !confirm {
+				fmt.Printf("This will clear the baseline for %s.\n", args[0])
+				fmt.Println("Re-run with --confirm to proceed.")
+				return nil
+			}
+			ctx := cmd.Context()
+			projectKey := resolveProjectKey(args[0])
+
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			if err := db.ResetBaseline(ctx, projectKey); err != nil {
+				return fmt.Errorf("reset baseline: %w", err)
+			}
+			fmt.Printf("Baseline cleared for %s.\n", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&confirm, "confirm", false, "confirm baseline deletion")
+	return cmd
 }
 
 // ── search ───────────────────────────────────────────────────────────────────
