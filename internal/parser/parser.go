@@ -4,5 +4,5 @@ package parser
 type Dependency struct {
 	Name      string
 	Version   string
-	Ecosystem string // "go", "python", "rust"
+	Ecosystem string // "go", "python", "rust", "npm"
 }
