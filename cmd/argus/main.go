@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +19,7 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
+	"github.com/abhishekamralkar/argus/internal/attest"
 	"github.com/abhishekamralkar/argus/internal/baseline"
 	"github.com/abhishekamralkar/argus/internal/cache"
 	col "github.com/abhishekamralkar/argus/internal/color"
@@ -104,6 +107,7 @@ func main() {
 	root.AddCommand(baselineCmd(&dbPath))
 	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(pluginsCmd())
+	root.AddCommand(verifyCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -653,6 +657,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var multi bool
 	var verbose bool
 	var fixesOnly bool
+	var doAttest bool
+	var attestOut string
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -806,6 +812,18 @@ func scanCmd(dbPath *string) *cobra.Command {
 				results = filterFixesOnly(results)
 			}
 
+			// Generate and sign scan attestation when requested.
+			if doAttest {
+				if attestOut == "" {
+					attestOut = "argus-attestation.json"
+				}
+				if err := buildAndSignAttestation(ctx, db, results, projectDir, llmModel, embedModel, attestOut); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: attestation failed: %v\n", err)
+				} else if isText {
+					fmt.Printf("Attestation written to %s\n", attestOut)
+				}
+			}
+
 			switch outputFmt {
 			case "json":
 				return output.WriteJSON(os.Stdout, results)
@@ -844,6 +862,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
 	cmd.Flags().StringVar(&baselineMode, "baseline-mode", "full", "baseline mode: full (all findings), diff (new only), update (diff + save baseline)")
 	cmd.Flags().BoolVar(&multi, "multi", false, "scan multiple project directories; each positional arg is a project path (supports ./path/...)")
+	cmd.Flags().BoolVar(&doAttest, "attest", false, "sign scan results and write an Ed25519 attestation file")
+	cmd.Flags().StringVar(&attestOut, "attestation-out", "", "path for the attestation JSON file (default: argus-attestation.json)")
 	return cmd
 }
 
@@ -1154,6 +1174,24 @@ func doctorCmd(dbPath *string) *cobra.Command {
 			}
 			checks := doctor.Run(ctx, cfg)
 
+			// Append signing-key check.
+			keyDir := attest.DefaultKeyDir()
+			keyFile := filepath.Join(keyDir, "signing.key")
+			if _, statErr := os.Stat(keyFile); statErr == nil {
+				checks = append(checks, doctor.Check{
+					Name:   "Signing key",
+					OK:     true,
+					Detail: fmt.Sprintf("Ed25519 key found (%s)", keyDir),
+				})
+			} else {
+				checks = append(checks, doctor.Check{
+					Name:   "Signing key",
+					OK:     false,
+					Detail: "no signing key found",
+					Hint:   fmt.Sprintf("run: argus scan --attest <dir>  (keys auto-generated in %s)", keyDir),
+				})
+			}
+
 			fmt.Println()
 			allOK := true
 			for _, c := range checks {
@@ -1183,7 +1221,94 @@ func doctorCmd(dbPath *string) *cobra.Command {
 	return cmd
 }
 
+// ── verify ───────────────────────────────────────────────────────────────────
+
+func verifyCmd() *cobra.Command {
+	var keyPath string
+
+	cmd := &cobra.Command{
+		Use:   "verify <attestation.json>",
+		Short: "Verify the Ed25519 signature on a scan attestation",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("read attestation: %w", err)
+			}
+			var a attest.Attestation
+			if err := json.Unmarshal(data, &a); err != nil {
+				return fmt.Errorf("parse attestation: %w", err)
+			}
+
+			var pub ed25519.PublicKey
+			if keyPath != "" {
+				pub, err = attest.LoadPublicKey(keyPath)
+				if err != nil {
+					return fmt.Errorf("load public key: %w", err)
+				}
+			} else {
+				kp, loadErr := attest.EnsureKeys(attest.DefaultKeyDir())
+				if loadErr != nil {
+					return fmt.Errorf("load signing keys: %w", loadErr)
+				}
+				pub = kp.Public
+			}
+
+			if verErr := attest.Verify(&a, pub); verErr != nil {
+				fmt.Fprintf(os.Stderr, "%s Signature INVALID: %v\n", col.Red("✗"), verErr)
+				os.Exit(2)
+			}
+			fmt.Printf("%s Signature valid\n", col.Green("✓"))
+			fmt.Printf("  Scan time:      %s\n", a.ScanTime)
+			fmt.Printf("  Scanned path:   %s\n", a.ScannedPath)
+			fmt.Printf("  Argus version:  %s\n", a.ArgusVersion)
+			fmt.Printf("  Findings:       %d\n", a.FindingsCount)
+			fmt.Printf("  Findings hash:  %s\n", a.FindingsHash)
+			fmt.Printf("  DB fingerprint: %s\n", a.DBFingerprint)
+			fmt.Printf("  Key hint:       %s\n", a.PublicKeyHint)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&keyPath, "key", "", "path to public key PEM file (default: ~/.argus/keys/signing.pub)")
+	return cmd
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// buildAndSignAttestation builds, signs, and writes a scan attestation JSON file.
+func buildAndSignAttestation(ctx context.Context, db *store.DB, results []rag.Result, projectDir, llmModel, embedModel, attestOut string) error {
+	findingsJSON, err := json.Marshal(output.BuildJSONResults(results))
+	if err != nil {
+		return fmt.Errorf("marshal findings: %w", err)
+	}
+	dbFP, totalVulns, err := db.Fingerprint(ctx)
+	if err != nil {
+		return fmt.Errorf("db fingerprint: %w", err)
+	}
+	kp, err := attest.EnsureKeys(attest.DefaultKeyDir())
+	if err != nil {
+		return fmt.Errorf("signing keys: %w", err)
+	}
+	a := attest.Build(attest.Params{
+		ArgusVersion:  Version,
+		ScannedPath:   projectDir,
+		DBFingerprint: dbFP,
+		TotalVulns:    totalVulns,
+		LLMModel:      llmModel,
+		EmbedModel:    embedModel,
+		FindingsJSON:  findingsJSON,
+		FindingsCount: len(results),
+		PublicKeyHint: attest.PublicKeyHint(kp.Public),
+	})
+	if err := attest.Sign(a, kp.Private); err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	data, err := json.MarshalIndent(a, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal attestation: %w", err)
+	}
+	return os.WriteFile(attestOut, data, 0o644) //nolint:gosec // attestation files are public artifacts
+}
 
 // filterFixesOnly returns only results that have at least one finding with a
 // known fix version. Results with no findings (OK) are excluded.
