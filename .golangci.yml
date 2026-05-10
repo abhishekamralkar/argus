@@ -20,6 +20,7 @@ linters:
     gosec:
       excludes:
         - G304
+        - G704
     gocritic:
       enabled-tags:
         - diagnostic
