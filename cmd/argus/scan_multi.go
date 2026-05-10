@@ -42,6 +42,7 @@ type multiScanOpts struct {
 	topK                int
 	baselineMode        string
 	verbose             bool
+	fixesOnly           bool
 }
 
 // runMultiScan resolves project directories from paths, scans each one
@@ -111,6 +112,9 @@ func runMultiScan(
 			}
 		}
 
+		if opts.fixesOnly {
+			results = filterFixesOnly(results)
+		}
 		projectResults = append(projectResults, ProjectResult{ProjectDir: dir, Results: results})
 	}
 

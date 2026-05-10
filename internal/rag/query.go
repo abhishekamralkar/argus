@@ -66,6 +66,7 @@ type Result struct {
 	RetrievedCount int
 	TopSeverity    string
 	TopCVSSScore   float64 // highest CVSS score across all findings (0 = none available)
+	TopFixedIn     string  // fix version for the top-severity finding that has one ("" = none known)
 	Findings       []store.SearchResult
 	LLMAnalysis    string
 	Err            error
@@ -200,6 +201,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 	result.RetrievedCount = len(relevant)
 	result.TopSeverity = topSeverity(relevant)
 	result.TopCVSSScore = topCVSSScore(relevant)
+	result.TopFixedIn = topFixedIn(relevant)
 	result.Findings = relevant
 
 	if len(relevant) == 0 {
@@ -256,6 +258,9 @@ func buildPrompt(dep parser.Dependency, results []store.SearchResult) string {
 	fmt.Fprintf(&sb, "You are a security researcher analyzing software dependencies for vulnerabilities.\n\n")
 	fmt.Fprintf(&sb, "Dependency under analysis: %s version %s (ecosystem: %s)\n\n", dep.Name, dep.Version, dep.Ecosystem)
 	fmt.Fprintf(&sb, "Known vulnerabilities retrieved from the database:\n\n")
+
+	// Collect known fix versions so we can tailor the prompt.
+	knownFixes := map[string]string{} // vuln ID → fixed-in version
 	for i, r := range results {
 		fmt.Fprintf(&sb, "--- Vulnerability %d ---\n", i+1)
 		fmt.Fprintf(&sb, "ID: %s\n", r.ID)
@@ -265,16 +270,33 @@ func buildPrompt(dep parser.Dependency, results []store.SearchResult) string {
 		}
 		if r.FixedIn != "" {
 			fmt.Fprintf(&sb, "Fixed in: %s\n", r.FixedIn)
+			knownFixes[r.ID] = r.FixedIn
 		}
 		fmt.Fprintf(&sb, "Details: %s\n\n", truncate(r.Content, 500))
 	}
+
 	fmt.Fprintf(&sb, "Based on the above, provide:\n")
 	fmt.Fprintf(&sb, "1. Is this dependency vulnerable? (YES / NO / MAYBE)\n")
 	fmt.Fprintf(&sb, "2. Severity level if vulnerable\n")
 	fmt.Fprintf(&sb, "3. Specific CVE or advisory IDs that apply\n")
-	fmt.Fprintf(&sb, "4. Recommended fix (upgrade version if applicable)\n")
+	if len(knownFixes) > 0 {
+		fmt.Fprintf(&sb, "4. Confirm the upgrade path — fix versions are already listed above for each advisory\n")
+	} else {
+		fmt.Fprintf(&sb, "4. Recommended fix (upgrade version if applicable)\n")
+	}
 	fmt.Fprintf(&sb, "5. Brief explanation of the risk\n")
 	return sb.String()
+}
+
+// topFixedIn returns the fix version of the first (highest-severity) finding
+// that has one, or "" when no fix is known for any finding.
+func topFixedIn(results []store.SearchResult) string {
+	for _, r := range results {
+		if r.FixedIn != "" {
+			return r.FixedIn
+		}
+	}
+	return ""
 }
 
 func topSeverity(results []store.SearchResult) string {

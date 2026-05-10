@@ -25,18 +25,26 @@ type JSONResult struct {
 	Severity     string        `json:"severity,omitempty"`
 	CVECount     int           `json:"cve_count"`
 	TopCVSSScore float64       `json:"top_cvss_score,omitempty"`
+	TopFix       string        `json:"top_fix,omitempty"`
 	Findings     []JSONFinding `json:"findings,omitempty"`
 }
 
+// JSONRemediation describes a structured upgrade action for a finding.
+type JSONRemediation struct {
+	Action    string `json:"action"`     // always "upgrade"
+	ToVersion string `json:"to_version"` // e.g. "2.31.0"
+}
+
 type JSONFinding struct {
-	ID         string  `json:"id"`
-	Package    string  `json:"package"`
-	Severity   string  `json:"severity,omitempty"`
-	CVSSScore  float64 `json:"cvss_score,omitempty"`
-	CVSSVector string  `json:"cvss_vector,omitempty"`
-	FixedIn    string  `json:"fixed_in,omitempty"`
-	Score      float64 `json:"score"`
-	Summary    string  `json:"summary,omitempty"`
+	ID          string           `json:"id"`
+	Package     string           `json:"package"`
+	Severity    string           `json:"severity,omitempty"`
+	CVSSScore   float64          `json:"cvss_score,omitempty"`
+	CVSSVector  string           `json:"cvss_vector,omitempty"`
+	FixedIn     string           `json:"fixed_in,omitempty"`
+	Score       float64          `json:"score"`
+	Summary     string           `json:"summary,omitempty"`
+	Remediation *JSONRemediation `json:"remediation,omitempty"`
 }
 
 // BuildJSONResults converts a slice of rag.Result to []JSONResult.
@@ -52,9 +60,10 @@ func BuildJSONResults(results []rag.Result) []JSONResult {
 			Severity:     r.TopSeverity,
 			CVECount:     r.RetrievedCount,
 			TopCVSSScore: r.TopCVSSScore,
+			TopFix:       r.TopFixedIn,
 		}
 		for _, f := range r.Findings {
-			jr.Findings = append(jr.Findings, JSONFinding{
+			jf := JSONFinding{
 				ID:         f.ID,
 				Package:    f.Package,
 				Severity:   f.Severity,
@@ -63,7 +72,14 @@ func BuildJSONResults(results []rag.Result) []JSONResult {
 				FixedIn:    f.FixedIn,
 				Score:      f.Score,
 				Summary:    truncate(f.Content, 300),
-			})
+			}
+			if f.FixedIn != "" {
+				jf.Remediation = &JSONRemediation{
+					Action:    "upgrade",
+					ToVersion: f.FixedIn,
+				}
+			}
+			jr.Findings = append(jr.Findings, jf)
 		}
 		out[i] = jr
 	}

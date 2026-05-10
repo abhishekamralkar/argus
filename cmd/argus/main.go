@@ -652,6 +652,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var baselineMode string
 	var multi bool
 	var verbose bool
+	var fixesOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -734,6 +735,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 					topK:                topK,
 					baselineMode:        baselineMode,
 					verbose:             verbose,
+					fixesOnly:           fixesOnly,
 				})
 			}
 
@@ -799,6 +801,11 @@ func scanCmd(dbPath *string) *cobra.Command {
 				}
 			}
 
+			// Filter to only actionable findings when --fixes-only is set.
+			if fixesOnly {
+				results = filterFixesOnly(results)
+			}
+
 			switch outputFmt {
 			case "json":
 				return output.WriteJSON(os.Stdout, results)
@@ -831,6 +838,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "severity or CVSS threshold for non-zero exit: LOW, MEDIUM, HIGH, CRITICAL, or cvss:N.N")
 	cmd.Flags().Float64Var(&minCVSS, "min-cvss", 0, "minimum CVSS v3 base score to report (0 = report all)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "show per-dependency analysis and CVSS scores in summary table")
+	cmd.Flags().BoolVar(&fixesOnly, "fixes-only", false, "only report packages that have at least one finding with a known fix version")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
@@ -1177,19 +1185,38 @@ func doctorCmd(dbPath *string) *cobra.Command {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// filterFixesOnly returns only results that have at least one finding with a
+// known fix version. Results with no findings (OK) are excluded.
+func filterFixesOnly(results []rag.Result) []rag.Result {
+	out := results[:0:0]
+	for _, r := range results {
+		for _, f := range r.Findings {
+			if f.FixedIn != "" {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
+}
+
 func printSummaryTable(results []rag.Result, verbose bool) {
 	fmt.Printf("\n%s\n\n", col.Bold("SCAN SUMMARY"))
 
 	t := tablewriter.NewWriter(os.Stdout)
 	if verbose {
-		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Top CVSS", "Verdict")
+		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Top CVSS", "Fix", "Verdict")
 	} else {
-		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Verdict")
+		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Fix", "Verdict")
 	}
 	for _, r := range results {
 		sev := r.TopSeverity
 		if sev == "" {
 			sev = "—"
+		}
+		fix := r.TopFixedIn
+		if fix == "" {
+			fix = "—"
 		}
 		if verbose {
 			cvss := "—"
@@ -1199,13 +1226,13 @@ func printSummaryTable(results []rag.Result, verbose bool) {
 			_ = t.Append([]string{
 				r.Dep.Name, r.Dep.Version, r.Dep.Ecosystem,
 				fmt.Sprintf("%d", r.RetrievedCount),
-				col.Severity(sev), cvss, col.Verdict(r.Verdict()),
+				col.Severity(sev), cvss, fix, col.Verdict(r.Verdict()),
 			})
 		} else {
 			_ = t.Append([]string{
 				r.Dep.Name, r.Dep.Version, r.Dep.Ecosystem,
 				fmt.Sprintf("%d", r.RetrievedCount),
-				col.Severity(sev), col.Verdict(r.Verdict()),
+				col.Severity(sev), fix, col.Verdict(r.Verdict()),
 			})
 		}
 	}
