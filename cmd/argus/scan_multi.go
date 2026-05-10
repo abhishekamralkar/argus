@@ -21,6 +21,7 @@ import (
 	"github.com/abhishekamralkar/argus/internal/output"
 	"github.com/abhishekamralkar/argus/internal/rag"
 	"github.com/abhishekamralkar/argus/internal/store"
+	"github.com/abhishekamralkar/argus/pkg/plugin"
 )
 
 // ProjectResult holds scan results for one project directory.
@@ -157,20 +158,12 @@ func resolveMultiDirs(paths []string) ([]string, error) {
 	return deduplicateDirs(dirs), nil
 }
 
-// depFileNames is the set of filenames that signal a project root.
-var depFileNames = map[string]bool{
-	"go.mod":            true,
-	"requirements.txt":  true,
-	"Cargo.toml":        true,
-	"package.json":      true,
-	"package-lock.json": true,
-	"pom.xml":           true,
-	"packages.config":   true,
-}
-
 // findProjectDirs walks root and returns each directory that contains at least
-// one recognized dependency file (go.mod, requirements.txt, Cargo.toml, etc.).
+// one recognized dependency file, as determined by the plugin registry.
 func findProjectDirs(root string) ([]string, error) {
+	exactNames := plugin.DepFileNames()
+	globPatterns := plugin.DepGlobPatterns()
+
 	seen := map[string]bool{}
 	var dirs []string
 
@@ -186,9 +179,17 @@ func findProjectDirs(root string) ([]string, error) {
 			return nil
 		}
 		base := filepath.Base(path)
-		if depFileNames[base] || strings.HasSuffix(base, ".csproj") {
+		if exactNames[base] {
 			seen[dir] = true
 			dirs = append(dirs, dir)
+			return nil
+		}
+		for _, pat := range globPatterns {
+			if matched, _ := filepath.Match(pat, base); matched {
+				seen[dir] = true
+				dirs = append(dirs, dir)
+				return nil
+			}
 		}
 		return nil
 	})
