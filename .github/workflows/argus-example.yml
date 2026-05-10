@@ -35,7 +35,7 @@ jobs:
         uses: abhishekamralkar/argus@main
         with:
           ecosystems: "go"          # ingest Go vulnerability database
-          project-dir: "."
+          scan-path: "."
           fail-on: "HIGH"
           output-format: "sarif"
           upload-sarif: "true"
@@ -48,7 +48,7 @@ jobs:
       #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       #   with:
       #     ecosystems: "go"
-      #     project-dir: "."
+      #     scan-path: "."
       #     llm-model: "gpt-4o-mini"
       #     embed-model: "text-embedding-3-small"
       #     fail-on: "HIGH"

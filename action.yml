@@ -1,5 +1,5 @@
 name: "Argus Vulnerability Scanner"
-description: "RAG-powered local vulnerability scanner for Go, Python, Rust, and npm projects"
+description: "RAG-powered local vulnerability scanner for Go, Python, Rust, npm, Maven, NuGet, and Ruby — runs entirely on the GitHub Actions runner, no cloud required."
 author: "Abhishek Amralkar"
 
 branding:
@@ -8,12 +8,12 @@ branding:
 
 inputs:
   version:
-    description: "Argus version to use (e.g. v0.3.0). Defaults to latest release."
+    description: "Argus version to use (e.g. v1.0.17). Defaults to latest release."
     required: false
     default: "latest"
 
-  project-dir:
-    description: "Directory containing the project to scan (go.mod, requirements.txt, Cargo.toml, package.json)."
+  scan-path:
+    description: "Directory containing the project to scan."
     required: false
     default: "."
 
@@ -22,43 +22,73 @@ inputs:
     required: false
     default: "/tmp/argus-vulns.db"
 
+  ecosystems:
+    description: "Comma-separated ecosystems to ingest before scanning (go, python, rust, npm, maven, nuget). Leave empty to skip ingest and use a pre-cached db."
+    required: false
+    default: ""
+
+  output-format:
+    description: "Output format: text, json, sarif, cyclonedx, or spdx."
+    required: false
+    default: "sarif"
+
+  fail-on:
+    description: "Severity or CVSS threshold that causes a non-zero exit: LOW, MEDIUM, HIGH, CRITICAL, or cvss:N.N."
+    required: false
+    default: "HIGH"
+
+  min-severity:
+    description: "Minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL."
+    required: false
+    default: ""
+
+  min-cvss:
+    description: "Minimum CVSS v3 base score to report (0 = report all)."
+    required: false
+    default: ""
+
+  profile:
+    description: "Named scan profile: default, fast, ci, or thorough. Overrides workers/top-k/similarity defaults."
+    required: false
+    default: ""
+
+  baseline-mode:
+    description: "Baseline mode: full (all findings), diff (new only), update (diff + save baseline)."
+    required: false
+    default: "full"
+
+  fixes-only:
+    description: "Only report packages that have at least one finding with a known fix version."
+    required: false
+    default: "false"
+
+  upload-sarif:
+    description: "Upload SARIF results to the GitHub Security tab (requires output-format: sarif)."
+    required: false
+    default: "true"
+
   ollama-host:
     description: "Ollama server URL. Ignored when OPENAI_API_KEY is set."
     required: false
     default: "http://localhost:11434"
 
   llm-model:
-    description: "LLM model name."
+    description: "LLM model name (Ollama default: llama3.1:8b; OpenAI default: gpt-4o-mini)."
     required: false
     default: ""
 
   embed-model:
-    description: "Embedding model name."
+    description: "Embedding model name (Ollama default: nomic-embed-text; OpenAI default: text-embedding-3-small)."
     required: false
     default: ""
 
-  min-severity:
-    description: "Minimum severity to report (LOW, MEDIUM, HIGH, CRITICAL)."
+  workers:
+    description: "Number of parallel dependency analysis workers."
     required: false
     default: ""
 
-  fail-on:
-    description: "Severity that causes a non-zero exit code (LOW, MEDIUM, HIGH, CRITICAL)."
-    required: false
-    default: "HIGH"
-
-  output-format:
-    description: "Output format: text, json, or sarif."
-    required: false
-    default: "sarif"
-
-  upload-sarif:
-    description: "Upload SARIF results to GitHub Security tab (requires output-format: sarif)."
-    required: false
-    default: "true"
-
-  ecosystems:
-    description: "Comma-separated ecosystems to ingest before scanning (go, python, rust, npm). Leave empty to skip ingest (use a cached db)."
+  top-k:
+    description: "Number of vector search candidates per dependency."
     required: false
     default: ""
 
@@ -66,6 +96,10 @@ outputs:
   sarif-file:
     description: "Path to the generated SARIF file (when output-format is sarif)."
     value: ${{ steps.scan.outputs.sarif-file }}
+
+  findings-count:
+    description: "Total number of findings reported by the scan."
+    value: ${{ steps.scan.outputs.findings-count }}
 
 runs:
   using: "composite"
@@ -115,34 +149,54 @@ runs:
       env:
         OLLAMA_HOST: ${{ inputs.ollama-host }}
       run: |
+        set -euo pipefail
         SARIF_FILE="${{ runner.temp }}/argus-results.sarif"
         EXTRA_FLAGS=""
+
         [ -n "${{ inputs.llm-model }}" ]   && EXTRA_FLAGS="$EXTRA_FLAGS --llm-model ${{ inputs.llm-model }}"
         [ -n "${{ inputs.embed-model }}" ] && EXTRA_FLAGS="$EXTRA_FLAGS --embed-model ${{ inputs.embed-model }}"
         [ -n "${{ inputs.min-severity }}" ] && EXTRA_FLAGS="$EXTRA_FLAGS --min-severity ${{ inputs.min-severity }}"
+        [ -n "${{ inputs.min-cvss }}" ]    && EXTRA_FLAGS="$EXTRA_FLAGS --min-cvss ${{ inputs.min-cvss }}"
+        [ -n "${{ inputs.profile }}" ]     && EXTRA_FLAGS="$EXTRA_FLAGS --profile ${{ inputs.profile }}"
+        [ -n "${{ inputs.workers }}" ]     && EXTRA_FLAGS="$EXTRA_FLAGS --workers ${{ inputs.workers }}"
+        [ -n "${{ inputs.top-k }}" ]       && EXTRA_FLAGS="$EXTRA_FLAGS --top-k ${{ inputs.top-k }}"
+        [ "${{ inputs.fixes-only }}" = "true" ] && EXTRA_FLAGS="$EXTRA_FLAGS --fixes-only"
+        [ "${{ inputs.baseline-mode }}" != "full" ] && EXTRA_FLAGS="$EXTRA_FLAGS --baseline-mode ${{ inputs.baseline-mode }}"
 
+        EXIT_CODE=0
         if [ "${{ inputs.output-format }}" = "sarif" ]; then
           argus scan \
             --db "${{ inputs.db-path }}" \
             --output sarif \
             --fail-on "${{ inputs.fail-on }}" \
             $EXTRA_FLAGS \
-            "${{ inputs.project-dir }}" > "$SARIF_FILE" || EXIT_CODE=$?
+            "${{ inputs.scan-path }}" > "$SARIF_FILE" || EXIT_CODE=$?
           echo "sarif-file=${SARIF_FILE}" >> "$GITHUB_OUTPUT"
+          # Extract findings count from SARIF result count
+          COUNT=$(python3 -c "
+        import json, sys
+        try:
+          d = json.load(open('${SARIF_FILE}'))
+          print(sum(len(r.get('results', [])) for run in d.get('runs', []) for r in [run]))
+        except Exception:
+          print(0)
+        " 2>/dev/null || echo 0)
+          echo "findings-count=${COUNT}" >> "$GITHUB_OUTPUT"
         else
           argus scan \
             --db "${{ inputs.db-path }}" \
             --output "${{ inputs.output-format }}" \
             --fail-on "${{ inputs.fail-on }}" \
             $EXTRA_FLAGS \
-            "${{ inputs.project-dir }}" || EXIT_CODE=$?
+            "${{ inputs.scan-path }}" || EXIT_CODE=$?
+          echo "findings-count=0" >> "$GITHUB_OUTPUT"
         fi
 
-        exit ${EXIT_CODE:-0}
+        exit $EXIT_CODE
 
     - name: Upload SARIF to GitHub Security tab
       if: always() && inputs.upload-sarif == 'true' && inputs.output-format == 'sarif' && steps.scan.outputs.sarif-file != ''
-      uses: github/codeql-action/upload-sarif@v4
+      uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ steps.scan.outputs.sarif-file }}
         category: argus
