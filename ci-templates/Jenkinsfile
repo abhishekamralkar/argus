@@ -1,0 +1,111 @@
+// Argus Vulnerability Scanner — Jenkins Declarative Pipeline
+//
+// Usage:
+//   1. Create a new Pipeline job in Jenkins.
+//   2. Set the pipeline script to this file (or use SCM with Jenkinsfile).
+//   3. Configure the credentials listed below in Jenkins Credentials Manager.
+//
+// Required credentials (Manage Jenkins > Credentials):
+//   OPENAI_API_KEY  — "Secret text" credential (when using OpenAI-compatible LLM)
+//
+// Optional environment variables (configure in the environment block below):
+//   ARGUS_VERSION      — Docker image tag         (default: latest)
+//   ARGUS_ECOSYSTEMS   — comma-separated list      (default: go,python,rust,npm)
+//   ARGUS_FAIL_ON      — severity threshold        (default: HIGH)
+//   ARGUS_MIN_SEVERITY — minimum severity to show  (default: empty = all)
+//   ARGUS_PROJECT_DIR  — relative path to scan     (default: .)
+//   OLLAMA_HOST        — Ollama server URL         (default: http://localhost:11434)
+
+pipeline {
+    agent {
+        docker {
+            image "ghcr.io/abhishekamralkar/argus:${env.ARGUS_VERSION ?: 'latest'}"
+            // Mount the workspace so Argus can read source files.
+            args  "-v ${env.WORKSPACE}:/workspace"
+        }
+    }
+
+    environment {
+        ARGUS_VERSION     = "latest"
+        ARGUS_DB          = "${env.WORKSPACE}/.argus/vulns.db"
+        ARGUS_ECOSYSTEMS  = "go,python,rust,npm"
+        ARGUS_FAIL_ON     = "HIGH"
+        ARGUS_MIN_SEVERITY = ""
+        ARGUS_PROJECT_DIR = "."
+        OLLAMA_HOST       = "http://localhost:11434"
+        // Bind the OpenAI key from Jenkins credentials (omit if using Ollama).
+        OPENAI_API_KEY    = credentials("OPENAI_API_KEY")
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: "MINUTES")
+    }
+
+    stages {
+        stage("Prepare") {
+            steps {
+                sh "mkdir -p .argus"
+            }
+        }
+
+        stage("Ingest vulnerability databases") {
+            steps {
+                // Restore cached DB if available (requires Jenkins Pipeline Utility Steps plugin).
+                cache(maxCacheSize: 512, caches: [
+                    arbitraryFileCache(
+                        path: ".argus",
+                        cacheValidityDecidingFile: "go.sum,requirements.txt,Cargo.lock,package-lock.json"
+                    )
+                ]) {
+                    sh """
+                        argus ingest \\
+                            --db "\${ARGUS_DB}" \\
+                            --ecosystems "\${ARGUS_ECOSYSTEMS}" \\
+                            --quiet
+                    """
+                }
+            }
+        }
+
+        stage("Scan for vulnerabilities") {
+            steps {
+                script {
+                    def extra = ""
+                    if (env.ARGUS_MIN_SEVERITY?.trim()) {
+                        extra = "--min-severity ${env.ARGUS_MIN_SEVERITY}"
+                    }
+                    // Use || true so the stage doesn't abort before archiving the SARIF.
+                    sh """
+                        argus scan \\
+                            --db "\${ARGUS_DB}" \\
+                            --output sarif \\
+                            --fail-on "\${ARGUS_FAIL_ON}" \\
+                            ${extra} \\
+                            "\${ARGUS_PROJECT_DIR}" > argus-results.sarif || echo "ARGUS_FAILED=1" >> .argus-status
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Archive the SARIF report regardless of pipeline outcome.
+            archiveArtifacts artifacts: "argus-results.sarif", allowEmptyArchive: true
+
+            // If the Warning Next Generation plugin is installed, publish the report:
+            // recordIssues tools: [sarif(pattern: "argus-results.sarif", name: "Argus")]
+
+            script {
+                // Fail the build if argus exited non-zero.
+                if (fileExists(".argus-status")) {
+                    error("Argus found vulnerabilities at or above the FAIL_ON threshold (${env.ARGUS_FAIL_ON}).")
+                }
+            }
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}

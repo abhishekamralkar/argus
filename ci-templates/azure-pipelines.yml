@@ -1,0 +1,104 @@
+# Argus Vulnerability Scanner — Azure DevOps Pipelines template
+#
+# Usage: copy this file to your repo root as azure-pipelines.yml, or
+# reference it as a template step from an existing pipeline:
+#
+#   steps:
+#     - template: ci-templates/azure-pipelines.yml
+#
+# Required pipeline variables (set in Library or pipeline settings):
+#   OPENAI_API_KEY   — when using an OpenAI-compatible LLM backend
+#
+# Optional pipeline variables:
+#   argusVersion      — Docker image tag, e.g. v0.5.0  (default: latest)
+#   argusDb           — path to vuln database          (default: $(Pipeline.Workspace)/.argus/vulns.db)
+#   argusEcosystems   — comma-separated ecosystems     (default: go,python,rust,npm)
+#   argusFailOn       — severity threshold              (default: HIGH)
+#   argusMinSeverity  — minimum severity to show        (default: unset = all)
+#   argusProjectDir   — directory to scan               (default: .)
+#   ollamaHost        — Ollama server URL               (default: http://localhost:11434)
+
+trigger:
+  branches:
+    include:
+      - main
+      - master
+
+pr:
+  branches:
+    include:
+      - "*"
+
+variables:
+  argusVersion: "latest"
+  argusDb: "$(Pipeline.Workspace)/.argus/vulns.db"
+  argusEcosystems: "go,python,rust,npm"
+  argusFailOn: "HIGH"
+  argusMinSeverity: ""
+  argusProjectDir: "."
+  ollamaHost: "http://localhost:11434"
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: Cache@2
+    displayName: "Restore Argus vulnerability database"
+    inputs:
+      key: 'argus-vulns-db | "$(Build.Repository.ID)"'
+      path: "$(Pipeline.Workspace)/.argus"
+      cacheHitVar: ARGUS_CACHE_HIT
+
+  - script: mkdir -p "$(Pipeline.Workspace)/.argus"
+    displayName: "Ensure .argus directory exists"
+
+  - script: |
+      docker pull ghcr.io/abhishekamralkar/argus:$(argusVersion)
+      docker run --rm \
+        -v "$(Build.SourcesDirectory):/workspace" \
+        -v "$(Pipeline.Workspace)/.argus:/data" \
+        -e OPENAI_API_KEY="$(OPENAI_API_KEY)" \
+        -e OLLAMA_HOST="$(ollamaHost)" \
+        ghcr.io/abhishekamralkar/argus:$(argusVersion) \
+        argus ingest \
+          --db /data/vulns.db \
+          --ecosystems "$(argusEcosystems)" \
+          --quiet
+    displayName: "Ingest vulnerability databases"
+
+  - script: |
+      EXTRA=""
+      [ -n "$(argusMinSeverity)" ] && EXTRA="--min-severity $(argusMinSeverity)"
+      docker run --rm \
+        -v "$(Build.SourcesDirectory):/workspace" \
+        -v "$(Pipeline.Workspace)/.argus:/data" \
+        -e OPENAI_API_KEY="$(OPENAI_API_KEY)" \
+        -e OLLAMA_HOST="$(ollamaHost)" \
+        ghcr.io/abhishekamralkar/argus:$(argusVersion) \
+        argus scan \
+          --db /data/vulns.db \
+          --output sarif \
+          --fail-on "$(argusFailOn)" \
+          $EXTRA \
+          /workspace/$(argusProjectDir) \
+        > "$(Build.ArtifactStagingDirectory)/argus-results.sarif"
+    displayName: "Scan for vulnerabilities"
+    # Continue on error so the SARIF artifact is always uploaded.
+    continueOnError: true
+
+  - task: PublishBuildArtifacts@1
+    displayName: "Publish SARIF report"
+    condition: always()
+    inputs:
+      pathToPublish: "$(Build.ArtifactStagingDirectory)/argus-results.sarif"
+      artifactName: "CodeAnalysisLogs"
+      publishLocation: "Container"
+
+  # Advanced Security tab integration (requires Azure DevOps Advanced Security).
+  # Uncomment the task below if your organization has it enabled.
+  #
+  # - task: AdvancedSecurity-Publish@1
+  #   displayName: "Upload SARIF to Advanced Security"
+  #   condition: always()
+  #   inputs:
+  #     SarifFile: "$(Build.ArtifactStagingDirectory)/argus-results.sarif"
