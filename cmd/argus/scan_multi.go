@@ -35,11 +35,13 @@ type multiScanOpts struct {
 	outputFmt           string
 	workers             int
 	minSeverity         string
+	minCVSS             float64
 	failOn              string
 	enhanceQuery        bool
 	similarityThreshold float64
 	topK                int
 	baselineMode        string
+	verbose             bool
 }
 
 // runMultiScan resolves project directories from paths, scans each one
@@ -75,6 +77,7 @@ func runMultiScan(
 		engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
 			EnhanceQuery:        opts.enhanceQuery,
 			MinSeverity:         opts.minSeverity,
+			MinCVSS:             opts.minCVSS,
 			SimilarityThreshold: opts.similarityThreshold,
 			TopK:                opts.topK,
 			IgnoreList:          ignoreList,
@@ -91,7 +94,7 @@ func runMultiScan(
 		}
 
 		fmt.Printf("  scanning %s (%d dependencies)...\n", dir, len(deps))
-		results := parallelScan(ctx, engine, deps, opts.workers, false)
+		results := parallelScan(ctx, engine, deps, opts.workers, opts.verbose)
 
 		projectKey := resolveProjectKey(dir)
 		if opts.baselineMode == "diff" || opts.baselineMode == "update" {
@@ -126,7 +129,7 @@ func runMultiScan(
 
 	for _, pr := range projectResults {
 		for _, r := range pr.Results {
-			if exceedsSeverity(r.Verdict(), opts.failOn) {
+			if failOnExceeded(r, opts.failOn) {
 				os.Exit(1)
 			}
 		}

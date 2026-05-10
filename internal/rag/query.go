@@ -30,6 +30,7 @@ const DefaultTopK = 10
 type EngineConfig struct {
 	EnhanceQuery        bool
 	MinSeverity         string
+	MinCVSS             float64 // skip findings with a known CVSS score below this threshold
 	SimilarityThreshold float64
 	TopK                int
 	IgnoreList          *ignore.List
@@ -64,6 +65,7 @@ type Result struct {
 	Dep            parser.Dependency
 	RetrievedCount int
 	TopSeverity    string
+	TopCVSSScore   float64 // highest CVSS score across all findings (0 = none available)
 	Findings       []store.SearchResult
 	LLMAnalysis    string
 	Err            error
@@ -173,11 +175,31 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 				continue
 			}
 		}
+		// Min-CVSS filter: only skip findings that have a known score below the threshold.
+		if e.cfg.MinCVSS > 0 && r.CVSSScore > 0 && r.CVSSScore < e.cfg.MinCVSS {
+			continue
+		}
 		relevant = append(relevant, r)
 	}
 
+	// Sort by severity tier (desc) then CVSS score (desc) within each tier.
+	slices.SortStableFunc(relevant, func(a, b store.SearchResult) int {
+		ra, rb := severityOrder[a.Severity], severityOrder[b.Severity]
+		if ra != rb {
+			return rb - ra
+		}
+		if b.CVSSScore != a.CVSSScore {
+			if b.CVSSScore > a.CVSSScore {
+				return 1
+			}
+			return -1
+		}
+		return 0
+	})
+
 	result.RetrievedCount = len(relevant)
 	result.TopSeverity = topSeverity(relevant)
+	result.TopCVSSScore = topCVSSScore(relevant)
 	result.Findings = relevant
 
 	if len(relevant) == 0 {
@@ -210,7 +232,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 func printCVETable(out io.Writer, results []store.SearchResult) {
 	_, _ = fmt.Fprintln(out)
 	t := tablewriter.NewWriter(out)
-	t.Header("ID", "Package", "Severity", "Fixed In", "Score")
+	t.Header("ID", "Package", "Severity", "CVSS", "Fixed In", "Score")
 	for _, r := range results {
 		sev := r.Severity
 		if sev == "" {
@@ -220,7 +242,11 @@ func printCVETable(out io.Writer, results []store.SearchResult) {
 		if fix == "" {
 			fix = "—"
 		}
-		_ = t.Append([]string{r.ID, r.Package, col.Severity(sev), fix, fmt.Sprintf("%.3f", r.Score)})
+		cvss := "—"
+		if r.CVSSScore > 0 {
+			cvss = fmt.Sprintf("%.1f", r.CVSSScore)
+		}
+		_ = t.Append([]string{r.ID, r.Package, col.Severity(sev), cvss, fix, fmt.Sprintf("%.3f", r.Score)})
 	}
 	_ = t.Render()
 }
@@ -256,6 +282,16 @@ func topSeverity(results []store.SearchResult) string {
 	for _, r := range results {
 		if severityOrder[r.Severity] > severityOrder[top] {
 			top = r.Severity
+		}
+	}
+	return top
+}
+
+func topCVSSScore(results []store.SearchResult) float64 {
+	var top float64
+	for _, r := range results {
+		if r.CVSSScore > top {
+			top = r.CVSSScore
 		}
 	}
 	return top
