@@ -29,6 +29,7 @@ import (
 	"github.com/abhishekamralkar/argus/internal/parser"
 	"github.com/abhishekamralkar/argus/internal/rag"
 	"github.com/abhishekamralkar/argus/internal/store"
+	"github.com/abhishekamralkar/argus/pkg/plugin"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=v1.2.3".
@@ -51,6 +52,7 @@ func main() {
 	root.AddCommand(statusCmd(&dbPath))
 	root.AddCommand(baselineCmd(&dbPath))
 	root.AddCommand(doctorCmd(&dbPath))
+	root.AddCommand(pluginsCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -800,64 +802,75 @@ func parallelScan(ctx context.Context, engine *rag.Engine, deps []parser.Depende
 	return results
 }
 
+// globalRegistry is initialised once at startup with all built-in parsers and
+// any external plugins found in DefaultPluginDir.
+var globalRegistry = func() *plugin.Registry {
+	r := plugin.NewRegistry()
+	_ = r.LoadDir(plugin.DefaultPluginDir())
+	return r
+}()
+
 func detectAndParse(dir string) ([]parser.Dependency, error) {
-	var all []parser.Dependency
-
-	candidates := []struct {
-		file   string
-		parser func(string) ([]parser.Dependency, error)
-	}{
-		{"go.mod", parser.ParseGoMod},
-		{"requirements.txt", parser.ParseRequirements},
-		{"Cargo.toml", parser.ParseCargoToml},
-		{"pom.xml", parser.ParsePomXML},
-		{"packages.config", parser.ParsePackagesConfig},
+	pluginDeps, err := globalRegistry.ParseDir(dir)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, c := range candidates {
-		path := filepath.Join(dir, c.file)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			continue
-		}
-		deps, err := c.parser(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "parse %s: %v\n", c.file, err)
-			continue
-		}
-		all = append(all, deps...)
+	deps := make([]parser.Dependency, len(pluginDeps))
+	for i, d := range pluginDeps {
+		deps[i] = parser.Dependency{Name: d.Name, Version: d.Version, Ecosystem: d.Ecosystem}
 	}
+	return deps, nil
+}
 
-	// npm: prefer package-lock.json (exact resolved versions); fall back to package.json.
-	lockPath := filepath.Join(dir, "package-lock.json")
-	pkgPath := filepath.Join(dir, "package.json")
-	if _, err := os.Stat(lockPath); err == nil {
-		if deps, err := parser.ParsePackageLockJSON(lockPath); err == nil {
-			all = append(all, deps...)
-		} else {
-			fmt.Fprintf(os.Stderr, "parse package-lock.json: %v\n", err)
-		}
-	} else if _, err := os.Stat(pkgPath); err == nil {
-		if deps, err := parser.ParsePackageJSON(pkgPath); err == nil {
-			all = append(all, deps...)
-		} else {
-			fmt.Fprintf(os.Stderr, "parse package.json: %v\n", err)
-		}
+// ── plugins ──────────────────────────────────────────────────────────────────
+
+func pluginsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "plugins",
+		Short: "Manage and list ecosystem parser plugins",
 	}
+	cmd.AddCommand(pluginsListCmd())
+	return cmd
+}
 
-	// .csproj files: glob for them in the project root.
-	csprojMatches, err := filepath.Glob(filepath.Join(dir, "*.csproj"))
-	if err == nil {
-		for _, path := range csprojMatches {
-			deps, err := parser.ParseCsproj(path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "parse %s: %v\n", filepath.Base(path), err)
-				continue
+func pluginsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all registered ecosystem parser plugins",
+		Run: func(cmd *cobra.Command, args []string) {
+			r := globalRegistry
+			all := r.All()
+
+			builtin := plugin.NewRegistry().All()
+			builtinNames := make(map[string]bool, len(builtin))
+			for _, p := range builtin {
+				builtinNames[p.Name()] = true
 			}
-			all = append(all, deps...)
-		}
-	}
 
-	return all, nil
+			fmt.Printf("\n%s\n\n", col.Bold("Registered plugins (%d)", len(all)))
+			t := tablewriter.NewWriter(os.Stdout)
+			t.Header("Name", "File Patterns", "Source")
+			for _, p := range all {
+				src := "built-in"
+				if !builtinNames[p.Name()] {
+					src = "external"
+				}
+				_ = t.Append([]string{
+					p.Name(),
+					strings.Join(p.FilePatterns(), ", "),
+					src,
+				})
+			}
+			_ = t.Render()
+
+			pluginDir := plugin.DefaultPluginDir()
+			fmt.Printf("\nPlugin directory: %s\n", pluginDir)
+			if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
+				fmt.Println("  (directory does not exist — create it and add .so files to extend argus)")
+			}
+			fmt.Println()
+		},
+	}
 }
 
 // ── baseline ─────────────────────────────────────────────────────────────────
