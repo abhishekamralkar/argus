@@ -6,6 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/abhishekamralkar/argus/internal/cache"
 	"github.com/abhishekamralkar/argus/internal/store"
 )
 
@@ -35,9 +36,10 @@ type pypaAdvisory struct {
 }
 
 // LoadPyPA downloads the PyPA advisory DB and calls fn per advisory.
-func LoadPyPA(fn func(*store.Vulnerability) error) error {
+// Pass a non-nil cache to enable ETag/Last-Modified caching.
+func LoadPyPA(c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	return loadFromZip(
-		"https://github.com/pypa/advisory-database/archive/refs/heads/main.zip",
+		"https://github.com/pypa/advisory-database/archive/refs/heads/main.zip", c,
 		func(name string) bool {
 			if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 				return false

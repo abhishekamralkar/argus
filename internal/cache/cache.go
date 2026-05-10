@@ -1,0 +1,157 @@
+package cache
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// Cache stores downloaded zip archives on disk and uses conditional HTTP
+// requests (ETag / Last-Modified) to avoid re-downloading unchanged feeds.
+type Cache struct {
+	dir string
+}
+
+type meta struct {
+	ETag         string    `json:"etag,omitempty"`
+	LastModified string    `json:"last_modified,omitempty"`
+	CachedAt     time.Time `json:"cached_at"`
+}
+
+// New returns a Cache backed by the XDG cache directory
+// ($XDG_CACHE_HOME/argus/feeds or ~/.cache/argus/feeds).
+// The directory is created if it does not exist.
+func New() (*Cache, error) {
+	dir, err := defaultDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create cache dir: %w", err)
+	}
+	return &Cache{dir: dir}, nil
+}
+
+// Dir returns the directory where cached files are stored.
+func (c *Cache) Dir() string { return c.dir }
+
+// Size returns the total byte size of all files in the cache directory.
+func (c *Cache) Size() (int64, error) {
+	var total int64
+	err := filepath.WalkDir(c.dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
+}
+
+// DownloadZip fetches url, returning a cached copy when the server returns
+// HTTP 304 (Not Modified). Falls back to the on-disk cache on network errors.
+func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
+	key := urlKey(url)
+	zipPath := filepath.Join(c.dir, key+".zip")
+	metaPath := filepath.Join(c.dir, key+".json")
+
+	var m meta
+	if raw, err := os.ReadFile(metaPath); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+
+	// 10-minute deadline matches the uncached downloader.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	if m.ETag != "" {
+		req.Header.Set("If-None-Match", m.ETag)
+	} else if m.LastModified != "" {
+		req.Header.Set("If-Modified-Since", m.LastModified)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// Fall back to cached copy on network error.
+		if zr, readErr := readCachedZip(zipPath); readErr == nil {
+			return zr, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return readCachedZip(zipPath)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	const maxBytes = 512 << 20
+	lr := io.LimitReader(resp.Body, maxBytes+1)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: read body: %w", url, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("download %s: response exceeds 512 MB size limit", url)
+	}
+
+	// Persist to cache (best-effort — a write failure does not abort the ingest).
+	if writeErr := os.WriteFile(zipPath, data, 0o600); writeErr == nil {
+		m = meta{
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: resp.Header.Get("Last-Modified"),
+			CachedAt:     time.Now().UTC(),
+		}
+		if b, jsonErr := json.Marshal(m); jsonErr == nil {
+			_ = os.WriteFile(metaPath, b, 0o600)
+		}
+	}
+
+	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
+}
+
+func readCachedZip(path string) (*zip.Reader, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
+}
+
+// urlKey returns a stable, filesystem-safe identifier for a URL.
+func urlKey(url string) string {
+	h := sha256.Sum256([]byte(url))
+	return hex.EncodeToString(h[:16])
+}
+
+func defaultDir() (string, error) {
+	base := os.Getenv("XDG_CACHE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(base, "argus", "feeds"), nil
+}

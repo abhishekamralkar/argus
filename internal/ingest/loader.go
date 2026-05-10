@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/abhishekamralkar/argus/internal/cache"
 )
 
 // loadFromZip downloads a zip from url and calls fn for each file whose name
-// passes match. Errors opening or reading individual entries are logged and
-// skipped; fn returning a non-nil error stops iteration and is returned.
-func loadFromZip(url string, match func(string) bool, fn func(name string, data []byte) error) error {
-	zr, err := downloadZip(url)
+// passes match. Pass a non-nil cache to enable ETag/Last-Modified caching.
+// Errors opening or reading individual entries are logged and skipped; fn
+// returning a non-nil error stops iteration and is returned.
+func loadFromZip(url string, c *cache.Cache, match func(string) bool, fn func(name string, data []byte) error) error {
+	zr, err := fetchZip(url, c)
 	if err != nil {
 		return err
 	}

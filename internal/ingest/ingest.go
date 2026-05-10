@@ -8,8 +8,11 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/abhishekamralkar/argus/internal/cache"
 )
 
+// downloadZip fetches url directly, with no caching.
 func downloadZip(url string) (*zip.Reader, error) {
 	// 10-minute deadline covers the full download of large feeds (OSV zips can be 300MB+).
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -40,4 +43,12 @@ func downloadZip(url string) (*zip.Reader, error) {
 		return nil, fmt.Errorf("download %s: response exceeds 512 MB size limit", url)
 	}
 	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
+}
+
+// fetchZip downloads url, using c when non-nil for ETag/Last-Modified caching.
+func fetchZip(url string, c *cache.Cache) (*zip.Reader, error) {
+	if c != nil {
+		return c.DownloadZip(url)
+	}
+	return downloadZip(url)
 }
