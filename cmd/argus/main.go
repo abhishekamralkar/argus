@@ -109,6 +109,8 @@ func main() {
 	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(pluginsCmd())
 	root.AddCommand(serveCmd(&dbPath))
+	root.AddCommand(configCmd())
+	root.AddCommand(verifyCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -676,6 +678,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var verbose bool
 	var fixesOnly bool
 	var profileName string
+	var doAttest bool
+	var attestOut string
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -877,6 +881,19 @@ func scanCmd(dbPath *string) *cobra.Command {
 				slog.Warn("could not save scan history", "error", err)
 			}
 
+			// Build and sign attestation when requested.
+			if doAttest {
+				out := attestOut
+				if out == "" {
+					out = "argus-attestation.json"
+				}
+				if err := buildAndSignAttestation(ctx, db, results, projectDir, llmModel, embedModel, out); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: attestation failed: %v\n", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "attestation written to %s\n", out)
+				}
+			}
+
 			switch outputFmt {
 			case "json":
 				return output.WriteJSON(os.Stdout, results)
@@ -916,6 +933,8 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&baselineMode, "baseline-mode", "full", "baseline mode: full (all findings), diff (new only), update (diff + save baseline)")
 	cmd.Flags().BoolVar(&multi, "multi", false, "scan multiple project directories; each positional arg is a project path (supports ./path/...)")
 	cmd.Flags().StringVar(&profileName, "profile", "", "named scan profile from .argus.yaml or built-in (default, fast, ci, thorough)")
+	cmd.Flags().BoolVar(&doAttest, "attest", false, "build and sign a scan attestation (keys auto-generated in ~/.argus/keys)")
+	cmd.Flags().StringVar(&attestOut, "attestation-out", "", "path to write the attestation JSON (default: argus-attestation.json)")
 	return cmd
 }
 
@@ -1422,6 +1441,52 @@ func buildAndSignAttestation(ctx context.Context, db *store.DB, results []rag.Re
 		return fmt.Errorf("marshal attestation: %w", err)
 	}
 	return os.WriteFile(attestOut, data, 0o644) //nolint:gosec // attestation files are public artifacts
+}
+
+// verifyCmd verifies a scan attestation file produced by --attest.
+func verifyCmd() *cobra.Command {
+	var keyPath string
+	cmd := &cobra.Command{
+		Use:   "verify <attestation.json>",
+		Short: "Verify a scan attestation signature",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("read attestation: %w", err)
+			}
+			var a attest.Attestation
+			if err := json.Unmarshal(data, &a); err != nil {
+				return fmt.Errorf("parse attestation: %w", err)
+			}
+			if keyPath == "" {
+				kp, err := attest.EnsureKeys(attest.DefaultKeyDir())
+				if err != nil {
+					return fmt.Errorf("load signing keys: %w", err)
+				}
+				if err := attest.Verify(&a, kp.Public); err != nil {
+					return fmt.Errorf("verification failed: %w", err)
+				}
+			} else {
+				pubKey, err := attest.LoadPublicKey(keyPath)
+				if err != nil {
+					return fmt.Errorf("load public key: %w", err)
+				}
+				if err := attest.Verify(&a, pubKey); err != nil {
+					return fmt.Errorf("verification failed: %w", err)
+				}
+			}
+			fmt.Printf("OK  signature valid\n")
+			fmt.Printf("    scanned:   %s\n", a.ScannedPath)
+			fmt.Printf("    scan time: %s\n", a.ScanTime)
+			fmt.Printf("    findings:  %d\n", a.FindingsCount)
+			fmt.Printf("    db digest: %s\n", a.DBFingerprint)
+			fmt.Printf("    key hint:  %s\n", a.PublicKeyHint)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&keyPath, "key", "", "path to PEM public key (default: ~/.argus/keys/signing.pub)")
+	return cmd
 }
 
 // filterFixesOnly returns only results that have at least one finding with a
