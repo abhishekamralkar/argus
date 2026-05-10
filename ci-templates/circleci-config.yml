@@ -1,0 +1,88 @@
+# Argus Vulnerability Scanner — CircleCI configuration
+#
+# Usage:
+#   Copy this file to .circleci/config.yml, or add the argus-scan job to
+#   your existing CircleCI configuration and reference it from a workflow.
+#
+# Required environment variables (set in Project Settings > Environment Variables):
+#   OPENAI_API_KEY   — when using an OpenAI-compatible LLM backend
+#
+# Optional environment variables:
+#   ARGUS_VERSION      — Docker image tag        (default: latest)
+#   ARGUS_ECOSYSTEMS   — comma-separated list     (default: go,python,rust,npm)
+#   ARGUS_FAIL_ON      — severity threshold       (default: HIGH)
+#   ARGUS_MIN_SEVERITY — minimum severity to show (default: empty = all)
+#   ARGUS_PROJECT_DIR  — directory to scan        (default: .)
+#   OLLAMA_HOST        — Ollama server URL        (default: http://localhost:11434)
+
+version: 2.1
+
+executors:
+  argus-executor:
+    docker:
+      - image: ghcr.io/abhishekamralkar/argus:${ARGUS_VERSION:-latest}
+    environment:
+      ARGUS_DB: /home/argus/.argus/vulns.db
+      ARGUS_ECOSYSTEMS: "go,python,rust,npm"
+      ARGUS_FAIL_ON: "HIGH"
+      ARGUS_MIN_SEVERITY: ""
+      ARGUS_PROJECT_DIR: "."
+      OLLAMA_HOST: "http://localhost:11434"
+
+jobs:
+  argus-scan:
+    executor: argus-executor
+    steps:
+      - checkout
+
+      - restore_cache:
+          keys:
+            # Prefer an exact lock-file match; fall back to any cached DB.
+            - argus-vulns-db-v1-{{ checksum "go.sum" }}-{{ checksum "requirements.txt" }}
+            - argus-vulns-db-v1-
+
+      - run:
+          name: Ensure .argus directory
+          command: mkdir -p /home/argus/.argus
+
+      - run:
+          name: Ingest vulnerability databases
+          command: |
+            argus ingest \
+              --db "$ARGUS_DB" \
+              --ecosystems "$ARGUS_ECOSYSTEMS" \
+              --quiet
+
+      - save_cache:
+          key: argus-vulns-db-v1-{{ checksum "go.sum" }}-{{ checksum "requirements.txt" }}
+          paths:
+            - /home/argus/.argus
+
+      - run:
+          name: Scan for vulnerabilities
+          command: |
+            EXTRA=""
+            [ -n "$ARGUS_MIN_SEVERITY" ] && EXTRA="--min-severity $ARGUS_MIN_SEVERITY"
+            argus scan \
+              --db "$ARGUS_DB" \
+              --output sarif \
+              --fail-on "$ARGUS_FAIL_ON" \
+              $EXTRA \
+              "$ARGUS_PROJECT_DIR" > /tmp/argus-results.sarif
+          # when: always ensures SARIF is stored even when scan fails.
+          when: always
+
+      - store_artifacts:
+          path: /tmp/argus-results.sarif
+          destination: argus-results.sarif
+
+workflows:
+  security-scan:
+    jobs:
+      - argus-scan:
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - /^release\/.*/

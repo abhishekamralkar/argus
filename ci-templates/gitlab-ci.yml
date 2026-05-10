@@ -1,0 +1,71 @@
+# Argus Vulnerability Scanner — GitLab CI template
+#
+# Usage (include in your .gitlab-ci.yml):
+#   include:
+#     - local: ci-templates/gitlab-ci.yml
+#
+# Or copy the job definition directly into your pipeline.
+#
+# Required variables (set in GitLab CI/CD Settings > Variables):
+#   OPENAI_API_KEY  — when using an OpenAI-compatible LLM backend
+#                     (leave unset to use Ollama via OLLAMA_HOST)
+#
+# Optional variables:
+#   ARGUS_VERSION       — image tag, e.g. v0.5.0  (default: latest)
+#   ARGUS_DB            — path to vuln database   (default: .argus/vulns.db)
+#   ARGUS_ECOSYSTEMS    — comma-separated list     (default: go,python,rust,npm)
+#   ARGUS_FAIL_ON       — severity threshold       (default: HIGH)
+#   ARGUS_MIN_SEVERITY  — minimum severity to show (default: unset = all)
+#   ARGUS_PROJECT_DIR   — directory to scan        (default: .)
+#   OLLAMA_HOST         — Ollama server URL        (default: http://localhost:11434)
+
+variables:
+  ARGUS_VERSION: "latest"
+  ARGUS_DB: ".argus/vulns.db"
+  ARGUS_ECOSYSTEMS: "go,python,rust,npm"
+  ARGUS_FAIL_ON: "HIGH"
+  ARGUS_MIN_SEVERITY: ""
+  ARGUS_PROJECT_DIR: "."
+  OLLAMA_HOST: "http://localhost:11434"
+
+argus-scan:
+  stage: test
+  image: ghcr.io/abhishekamralkar/argus:${ARGUS_VERSION}
+  cache:
+    key: argus-vulns-db-${CI_PROJECT_ID}
+    paths:
+      - .argus/
+  before_script:
+    - mkdir -p .argus
+  script:
+    # Ingest vulnerability databases (skipped automatically when DB is cached
+    # and --since auto-detection determines nothing new has been published).
+    - |
+      argus ingest \
+        --db "$ARGUS_DB" \
+        --ecosystems "$ARGUS_ECOSYSTEMS" \
+        --quiet
+    # Scan and write SARIF output.
+    - |
+      EXTRA=""
+      [ -n "$ARGUS_MIN_SEVERITY" ] && EXTRA="--min-severity $ARGUS_MIN_SEVERITY"
+      argus scan \
+        --db "$ARGUS_DB" \
+        --output sarif \
+        --fail-on "$ARGUS_FAIL_ON" \
+        $EXTRA \
+        "$ARGUS_PROJECT_DIR" > gl-sast-report.sarif
+  after_script:
+    # Always upload the SARIF artifact, even when the scan step fails, so that
+    # findings are visible in the GitLab Security Dashboard.
+    - "true"
+  artifacts:
+    when: always
+    reports:
+      sast: gl-sast-report.sarif
+    paths:
+      - gl-sast-report.sarif
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
