@@ -1,0 +1,97 @@
+# Argus Vulnerability Scanner — AWS CodeBuild buildspec
+#
+# Usage:
+#   Reference this file in your CodeBuild project (Buildspec > Use a buildspec file)
+#   or paste it directly into the project's inline buildspec editor.
+#
+# Required environment variables (set in CodeBuild project or Parameter Store):
+#   OPENAI_API_KEY   — when using an OpenAI-compatible LLM backend
+#                      Store as a SecretString in AWS Secrets Manager and reference
+#                      it as an environment variable of type SECRETS_MANAGER.
+#
+# Optional environment variables (set in CodeBuild project environment):
+#   ARGUS_VERSION      — Docker image tag        (default: latest)
+#   ARGUS_ECOSYSTEMS   — comma-separated list     (default: go,python,rust,npm)
+#   ARGUS_FAIL_ON      — severity threshold       (default: HIGH)
+#   ARGUS_MIN_SEVERITY — minimum severity to show (default: empty = all)
+#   ARGUS_PROJECT_DIR  — directory to scan        (default: .)
+#   OLLAMA_HOST        — Ollama server URL        (default: http://localhost:11434)
+#
+# S3 caching:
+#   Configure a CodeBuild cache (S3) pointing to a bucket your build role can
+#   access. The vuln database path below is included in the cache.
+
+version: 0.2
+
+env:
+  variables:
+    ARGUS_VERSION: "latest"
+    ARGUS_DB: "/tmp/.argus/vulns.db"
+    ARGUS_ECOSYSTEMS: "go,python,rust,npm"
+    ARGUS_FAIL_ON: "HIGH"
+    ARGUS_MIN_SEVERITY: ""
+    ARGUS_PROJECT_DIR: "."
+    OLLAMA_HOST: "http://localhost:11434"
+  # Uncomment to pull OPENAI_API_KEY from Secrets Manager:
+  # secrets-manager:
+  #   OPENAI_API_KEY: "arn:aws:secretsmanager:us-east-1:123456789012:secret:argus/openai-key"
+
+cache:
+  paths:
+    - "/tmp/.argus/**/*"
+
+phases:
+  install:
+    runtime-versions:
+      docker: 20
+    commands:
+      - echo "Pulling Argus Docker image..."
+      - docker pull ghcr.io/abhishekamralkar/argus:${ARGUS_VERSION}
+      - mkdir -p /tmp/.argus
+
+  pre_build:
+    commands:
+      - echo "Ingesting vulnerability databases..."
+      - |
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -v "/tmp/.argus:/data" \
+          -e OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+          -e OLLAMA_HOST="$OLLAMA_HOST" \
+          ghcr.io/abhishekamralkar/argus:${ARGUS_VERSION} \
+          argus ingest \
+            --db /data/vulns.db \
+            --ecosystems "$ARGUS_ECOSYSTEMS" \
+            --quiet
+
+  build:
+    commands:
+      - echo "Scanning for vulnerabilities..."
+      - |
+        EXTRA=""
+        [ -n "$ARGUS_MIN_SEVERITY" ] && EXTRA="--min-severity $ARGUS_MIN_SEVERITY"
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -v "/tmp/.argus:/data" \
+          -e OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+          -e OLLAMA_HOST="$OLLAMA_HOST" \
+          ghcr.io/abhishekamralkar/argus:${ARGUS_VERSION} \
+          argus scan \
+            --db /data/vulns.db \
+            --output sarif \
+            --fail-on "$ARGUS_FAIL_ON" \
+            $EXTRA \
+            /workspace/${ARGUS_PROJECT_DIR} \
+          > argus-results.sarif
+
+  post_build:
+    commands:
+      - echo "Scan complete. SARIF report written to argus-results.sarif."
+      # Optionally import SARIF into AWS Security Hub via a custom integration.
+      # See: https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-findings-format.html
+
+artifacts:
+  files:
+    - argus-results.sarif
+  name: argus-sarif-$(date +%Y-%m-%d)
+  discard-paths: yes
