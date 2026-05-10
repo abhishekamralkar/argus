@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
 )
@@ -107,6 +108,22 @@ func (s *DB) UpsertVulnMeta(ctx context.Context, v *Vulnerability) error {
 func (s *DB) DeleteChunksForVuln(ctx context.Context, vulnID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM vulnerability_chunks WHERE vuln_id = ?`, vulnID)
 	return err
+}
+
+// GetLastIngest returns the timestamp of the most recent successful ingest run
+// for the given source, and true if a record exists.
+func (s *DB) GetLastIngest(ctx context.Context, source string) (time.Time, bool, error) {
+	var ts time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT last_run_at FROM ingest_log WHERE source = ?`, source,
+	).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return ts, true, nil
 }
 
 // TouchIngestLog records a successful ingest run for the given source name.

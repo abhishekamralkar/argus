@@ -38,6 +38,29 @@ var Version = "dev"
 
 var validFailOnValues = map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
 
+// parseSince parses a --since flag value as YYYY-MM-DD or RFC3339.
+func parseSince(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("--since: cannot parse %q (use YYYY-MM-DD or RFC3339)", s)
+}
+
+// effectiveDate returns the later of published and modified (the date that
+// determines whether an advisory is "new" relative to a since cutoff).
+func effectiveDate(published, modified time.Time) time.Time {
+	if modified.After(published) {
+		return modified
+	}
+	return published
+}
+
 // validateFailOn accepts severity labels (LOW–CRITICAL) and "cvss:N.N" format.
 func validateFailOn(s string) error {
 	if validFailOnValues[strings.ToUpper(s)] {
@@ -202,6 +225,8 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	var timeoutMin int
 	var quiet bool
 	var noCache bool
+	var sinceStr string
+	var full bool
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -214,6 +239,11 @@ func ingestCmd(dbPath *string) *cobra.Command {
 				if chunkOverlap < 0 || chunkOverlap >= chunkSize {
 					return fmt.Errorf("--chunk-overlap must be in [0, chunk-size), got %d (chunk-size=%d)", chunkOverlap, chunkSize)
 				}
+			}
+
+			sinceTime, err := parseSince(sinceStr)
+			if err != nil {
+				return err
 			}
 
 			ctx := context.Background()
@@ -256,7 +286,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 					errs = append(errs, fmt.Errorf("ingest cancelled: %w", ctx.Err()))
 					break
 				}
-				if err := runIngest(ctx, db, embedder, feedCache, eco, workers, skipExisting, cc, quiet); err != nil {
+				if err := runIngest(ctx, db, embedder, feedCache, eco, workers, skipExisting, cc, quiet, sinceTime, full); err != nil {
 					fmt.Fprintf(os.Stderr, "ingest %s: %v\n", eco, err)
 					errs = append(errs, fmt.Errorf("%s: %w", eco, err))
 				}
@@ -274,12 +304,14 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 0, "ingest timeout in minutes (0 = no timeout)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress bar output (useful in CI)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "disable local feed cache; always re-download zip archives")
+	cmd.Flags().StringVar(&sinceStr, "since", "", "only ingest advisories published/modified after this date (YYYY-MM-DD or RFC3339); auto-detected from last ingest when omitted")
+	cmd.Flags().BoolVar(&full, "full", false, "re-process all advisories regardless of last-ingest time (does not bypass --no-cache)")
 	return cmd
 }
 
 const batchSize = 50
 
-func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cache.Cache, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool) error {
+func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cache.Cache, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool, globalSince time.Time, full bool) error {
 	type source struct {
 		name string
 		fn   func(func(*store.Vulnerability) error) error
@@ -320,10 +352,50 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cac
 
 	var errs []error
 	for _, src := range sources {
-		fmt.Printf("Ingesting %s (workers=%d, chunk=%v)...\n", src.name, numWorkers, cc.enabled)
-		if err := ingestSource(ctx, db, embedder, src.name, src.fn, numWorkers, skipExisting, cc, quiet); err != nil {
+		// Determine the since cutoff for this specific source.
+		var sinceCutoff time.Time
+		if !full {
+			sinceCutoff = globalSince
+			if sinceCutoff.IsZero() {
+				// Auto-detect: use last successful ingest time for this source.
+				if t, ok, _ := db.GetLastIngest(ctx, src.name); ok {
+					sinceCutoff = t
+				}
+			}
+		}
+
+		if sinceCutoff.IsZero() {
+			fmt.Printf("Ingesting %s (workers=%d, chunk=%v)...\n", src.name, numWorkers, cc.enabled)
+		} else {
+			fmt.Printf("Ingesting %s since %s (workers=%d, chunk=%v)...\n",
+				src.name, sinceCutoff.Format("2006-01-02"), numWorkers, cc.enabled)
+		}
+
+		// Wrap the loader to apply the since filter and count skipped entries.
+		var sinceSkipped atomic.Int64
+		loader := src.fn
+		if !sinceCutoff.IsZero() {
+			cutoff := sinceCutoff
+			loader = func(fn func(*store.Vulnerability) error) error {
+				return src.fn(func(v *store.Vulnerability) error {
+					eff := effectiveDate(v.Published, v.Modified)
+					if !eff.IsZero() && !eff.After(cutoff) {
+						sinceSkipped.Add(1)
+						return nil
+					}
+					return fn(v)
+				})
+			}
+		}
+
+		if err := ingestSource(ctx, db, embedder, src.name, loader, numWorkers, skipExisting, cc, quiet); err != nil {
 			fmt.Fprintf(os.Stderr, "  source %s failed: %v\n", src.name, err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.name, err))
+		}
+
+		if n := sinceSkipped.Load(); n > 0 {
+			fmt.Printf("  %s: %d advisories skipped (not modified since %s)\n",
+				src.name, n, sinceCutoff.Format("2006-01-02"))
 		}
 	}
 
