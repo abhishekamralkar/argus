@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abhishekamralkar/argus/internal/baseline"
+	"github.com/abhishekamralkar/argus/internal/cache"
 	col "github.com/abhishekamralkar/argus/internal/color"
 	"github.com/abhishekamralkar/argus/internal/config"
 	"github.com/abhishekamralkar/argus/internal/doctor"
@@ -127,8 +128,28 @@ func statusCmd(dbPath *string) *cobra.Command {
 			}
 			_ = t.Render()
 			fmt.Println()
+
+			if fc, err := cache.New(); err == nil {
+				if sz, err := fc.Size(); err == nil {
+					fmt.Printf("Feed cache: %s (%s)\n\n", fc.Dir(), formatBytes(sz))
+				}
+			}
+
 			return nil
 		},
+	}
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
 	}
 }
 
@@ -150,6 +171,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	var chunkOverlap int
 	var timeoutMin int
 	var quiet bool
+	var noCache bool
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -183,6 +205,16 @@ func ingestCmd(dbPath *string) *cobra.Command {
 				overlap: chunkOverlap,
 			}
 
+			var feedCache *cache.Cache
+			if !noCache {
+				feedCache, err = cache.New()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not initialise feed cache: %v — downloading without cache\n", err)
+				} else {
+					fmt.Printf("Feed cache: %s\n", feedCache.Dir())
+				}
+			}
+
 			embedder := embed.NewClient(embedModel)
 			var errs []error
 			for eco := range strings.SplitSeq(ecosystems, ",") {
@@ -194,7 +226,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 					errs = append(errs, fmt.Errorf("ingest cancelled: %w", ctx.Err()))
 					break
 				}
-				if err := runIngest(ctx, db, embedder, eco, workers, skipExisting, cc, quiet); err != nil {
+				if err := runIngest(ctx, db, embedder, feedCache, eco, workers, skipExisting, cc, quiet); err != nil {
 					fmt.Fprintf(os.Stderr, "ingest %s: %v\n", eco, err)
 					errs = append(errs, fmt.Errorf("%s: %w", eco, err))
 				}
@@ -211,12 +243,13 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&chunkOverlap, "chunk-overlap", ingest.DefaultChunkOverlap, "overlap characters between chunks")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 0, "ingest timeout in minutes (0 = no timeout)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "suppress progress bar output (useful in CI)")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "disable local feed cache; always re-download zip archives")
 	return cmd
 }
 
 const batchSize = 50
 
-func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool) error {
+func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cache.Cache, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool) error {
 	type source struct {
 		name string
 		fn   func(func(*store.Vulnerability) error) error
@@ -226,30 +259,30 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, ecosys
 	switch ecosystem {
 	case "go":
 		sources = []source{
-			{"OSV/Go", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Go", fn) }},
-			{"GoVulnDB", ingest.LoadGoVulnDB},
+			{"OSV/Go", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Go", c, fn) }},
+			{"GoVulnDB", func(fn func(*store.Vulnerability) error) error { return ingest.LoadGoVulnDB(c, fn) }},
 		}
 	case "python":
 		sources = []source{
-			{"OSV/PyPI", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("PyPI", fn) }},
-			{"PyPA", ingest.LoadPyPA},
+			{"OSV/PyPI", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("PyPI", c, fn) }},
+			{"PyPA", func(fn func(*store.Vulnerability) error) error { return ingest.LoadPyPA(c, fn) }},
 		}
 	case "rust":
 		sources = []source{
-			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", fn) }},
-			{"RustSec", ingest.LoadRustSec},
+			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", c, fn) }},
+			{"RustSec", func(fn func(*store.Vulnerability) error) error { return ingest.LoadRustSec(c, fn) }},
 		}
 	case "npm":
 		sources = []source{
-			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", fn) }},
+			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", c, fn) }},
 		}
 	case "maven":
 		sources = []source{
-			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Maven", fn) }},
+			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Maven", c, fn) }},
 		}
 	case "nuget":
 		sources = []source{
-			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", fn) }},
+			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", c, fn) }},
 		}
 	default:
 		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm, maven, nuget)", ecosystem)

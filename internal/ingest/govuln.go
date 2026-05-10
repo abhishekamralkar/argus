@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abhishekamralkar/argus/internal/cache"
 	"github.com/abhishekamralkar/argus/internal/store"
 )
 
@@ -36,9 +37,10 @@ type goVulnRecord struct {
 }
 
 // LoadGoVulnDB downloads the Go vulnerability database zip and calls fn per entry.
-func LoadGoVulnDB(fn func(*store.Vulnerability) error) error {
+// Pass a non-nil cache to enable ETag/Last-Modified caching.
+func LoadGoVulnDB(c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	return loadFromZip(
-		"https://vuln.go.dev/index/db.zip",
+		"https://vuln.go.dev/index/db.zip", c,
 		func(name string) bool {
 			return strings.HasSuffix(name, ".json") && !strings.Contains(name, "index")
 		},

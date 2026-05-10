@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abhishekamralkar/argus/internal/cache"
 	"github.com/abhishekamralkar/argus/internal/store"
 )
 
@@ -106,8 +107,9 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 }
 
 // LoadOSV downloads the OSV zip for the given ecosystem (e.g. "Go", "PyPI", "crates.io")
-// and calls fn for each parsed vulnerability.
-func LoadOSV(osvEco string, fn func(*store.Vulnerability) error) error {
+// and calls fn for each parsed vulnerability. Pass a non-nil cache to enable
+// ETag/Last-Modified caching of the downloaded zip.
+func LoadOSV(osvEco string, c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	eco, ok := osvEcosystems[osvEco]
 	if !ok {
 		return fmt.Errorf("unknown OSV ecosystem: %s", osvEco)
@@ -118,7 +120,7 @@ func LoadOSV(osvEco string, fn func(*store.Vulnerability) error) error {
 	}
 
 	return loadFromZip(
-		url,
+		url, c,
 		func(name string) bool {
 			return strings.HasSuffix(name, ".json")
 		},

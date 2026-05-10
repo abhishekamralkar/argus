@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/abhishekamralkar/argus/internal/cache"
 	"github.com/abhishekamralkar/argus/internal/store"
 )
 
@@ -25,9 +26,10 @@ type rustSecAdvisory struct {
 }
 
 // LoadRustSec downloads the RustSec advisory DB and calls fn per advisory.
-func LoadRustSec(fn func(*store.Vulnerability) error) error {
+// Pass a non-nil cache to enable ETag/Last-Modified caching.
+func LoadRustSec(c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	return loadFromZip(
-		"https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip",
+		"https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip", c,
 		func(name string) bool {
 			if !strings.HasSuffix(name, ".toml") {
 				return false
