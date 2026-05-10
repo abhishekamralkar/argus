@@ -105,6 +105,13 @@ func buildCycloneDX(results []rag.Result) cdxBOM {
 			if f.FixedIn != "" {
 				rec = fmt.Sprintf("Upgrade %s to %s or later.", r.Dep.Name, f.FixedIn)
 			}
+			rating := cdxRating{
+				Source:   cdxSource{Name: "argus"},
+				Severity: strings.ToLower(f.Severity),
+			}
+			if f.CVSSScore > 0 {
+				rating.Score = f.CVSSScore
+			}
 			bom.Vulnerabilities = append(bom.Vulnerabilities, cdxVuln{
 				BOMRef: fmt.Sprintf("vuln-%s-%s", f.ID, r.Dep.Name),
 				ID:     f.ID,
@@ -112,10 +119,7 @@ func buildCycloneDX(results []rag.Result) cdxBOM {
 					Name: osvSourceName(f.ID),
 					URL:  osvURL(f.ID),
 				},
-				Ratings: []cdxRating{{
-					Source:   cdxSource{Name: "argus"},
-					Severity: strings.ToLower(f.Severity),
-				}},
+				Ratings:        []cdxRating{rating},
 				Description:    truncate(f.Content, 500),
 				Recommendation: rec,
 				Affects:        []cdxAffects{{Ref: purl}},
