@@ -36,11 +36,10 @@ type JSONFinding struct {
 	Summary  string  `json:"summary,omitempty"`
 }
 
-func WriteJSON(w io.Writer, results []rag.Result) error {
-	report := JSONReport{
-		ScannedAt: time.Now().UTC().Format(time.RFC3339),
-		Results:   make([]JSONResult, len(results)),
-	}
+// BuildJSONResults converts a slice of rag.Result to []JSONResult.
+// Used by both WriteJSON and multi-project JSON output.
+func BuildJSONResults(results []rag.Result) []JSONResult {
+	out := make([]JSONResult, len(results))
 	for i, r := range results {
 		jr := JSONResult{
 			Package:   r.Dep.Name,
@@ -60,7 +59,15 @@ func WriteJSON(w io.Writer, results []rag.Result) error {
 				Summary:  truncate(f.Content, 300),
 			})
 		}
-		report.Results[i] = jr
+		out[i] = jr
+	}
+	return out
+}
+
+func WriteJSON(w io.Writer, results []rag.Result) error {
+	report := JSONReport{
+		ScannedAt: time.Now().UTC().Format(time.RFC3339),
+		Results:   BuildJSONResults(results),
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
