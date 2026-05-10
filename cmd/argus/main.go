@@ -104,6 +104,7 @@ func main() {
 	root.AddCommand(baselineCmd(&dbPath))
 	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(pluginsCmd())
+	root.AddCommand(configCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -227,6 +228,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	var noCache bool
 	var sinceStr string
 	var full bool
+	var profileName string
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -244,6 +246,21 @@ func ingestCmd(dbPath *string) *cobra.Command {
 			sinceTime, err := parseSince(sinceStr)
 			if err != nil {
 				return err
+			}
+
+			// Apply profile values for ingest-relevant fields.
+			if profileName != "" {
+				cfg, _ := config.Load(".")
+				if p, ok := cfg.ResolveProfile(profileName); ok {
+					if !cmd.Flags().Changed("workers") && p.Workers > 0 {
+						workers = p.Workers
+					}
+					if !cmd.Flags().Changed("embed-model") && p.EmbedModel != "" {
+						embedModel = p.EmbedModel
+					}
+				} else {
+					return fmt.Errorf("unknown profile %q (run: argus config profiles list)", profileName)
+				}
 			}
 
 			ctx := context.Background()
@@ -306,6 +323,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "disable local feed cache; always re-download zip archives")
 	cmd.Flags().StringVar(&sinceStr, "since", "", "only ingest advisories published/modified after this date (YYYY-MM-DD or RFC3339); auto-detected from last ingest when omitted")
 	cmd.Flags().BoolVar(&full, "full", false, "re-process all advisories regardless of last-ingest time (does not bypass --no-cache)")
+	cmd.Flags().StringVar(&profileName, "profile", "", "named profile from .argus.yaml or built-in; applies workers and embed-model")
 	return cmd
 }
 
@@ -653,6 +671,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var multi bool
 	var verbose bool
 	var fixesOnly bool
+	var profileName string
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -668,10 +687,6 @@ func scanCmd(dbPath *string) *cobra.Command {
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateFailOn(failOn); err != nil {
-				return err
-			}
-
 			baselineMode = strings.ToLower(baselineMode)
 			if !validBaselineModes[baselineMode] {
 				return fmt.Errorf("--baseline-mode must be one of full, diff, update (got %q)", baselineMode)
@@ -690,28 +705,76 @@ func scanCmd(dbPath *string) *cobra.Command {
 				configDir = args[0]
 			}
 
-			// Load config file; CLI flags take precedence.
+			// Load config file.
 			cfg, _ := config.Load(configDir)
-			if llmModel == "" {
+
+			// Resolve profile: --profile flag, then default_profile from config.
+			profName := profileName
+			if profName == "" {
+				profName = cfg.DefaultProfile
+			}
+			var prof *config.Profile
+			if profName != "" {
+				p, ok := cfg.ResolveProfile(profName)
+				if !ok {
+					return fmt.Errorf("unknown profile %q (run: argus config profiles list)", profName)
+				}
+				prof = p
+			}
+
+			// Apply config file top-level values where CLI flag was not set.
+			if !cmd.Flags().Changed("llm-model") && cfg.LLMModel != "" {
 				llmModel = cfg.LLMModel
 			}
-			if embedModel == "" {
+			if !cmd.Flags().Changed("embed-model") && cfg.EmbedModel != "" {
 				embedModel = cfg.EmbedModel
 			}
-			if minSeverity == "" {
+			if !cmd.Flags().Changed("min-severity") && cfg.MinSeverity != "" {
 				minSeverity = cfg.MinSeverity
 			}
-			if workers == 4 && cfg.Workers > 0 {
+			if !cmd.Flags().Changed("workers") && cfg.Workers > 0 {
 				workers = cfg.Workers
 			}
-			if topK == 0 && cfg.TopK > 0 {
+			if !cmd.Flags().Changed("top-k") && cfg.TopK > 0 {
 				topK = cfg.TopK
 			}
-			if llmBaseURL == "" {
+			if !cmd.Flags().Changed("llm-base-url") && cfg.LLMBaseURL != "" {
 				llmBaseURL = cfg.LLMBaseURL
 			}
-			if embedBaseURL == "" {
+			if !cmd.Flags().Changed("embed-base-url") && cfg.EmbedBaseURL != "" {
 				embedBaseURL = cfg.EmbedBaseURL
+			}
+
+			// Apply profile values (higher priority than config file, lower than CLI).
+			if prof != nil {
+				if !cmd.Flags().Changed("workers") && prof.Workers > 0 {
+					workers = prof.Workers
+				}
+				if !cmd.Flags().Changed("top-k") && prof.TopK > 0 {
+					topK = prof.TopK
+				}
+				if !cmd.Flags().Changed("similarity-threshold") && prof.SimilarityThreshold > 0 {
+					similarityThreshold = prof.SimilarityThreshold
+				}
+				if !cmd.Flags().Changed("llm-model") && prof.LLMModel != "" {
+					llmModel = prof.LLMModel
+				}
+				if !cmd.Flags().Changed("embed-model") && prof.EmbedModel != "" {
+					embedModel = prof.EmbedModel
+				}
+				if !cmd.Flags().Changed("min-severity") && prof.MinSeverity != "" {
+					minSeverity = prof.MinSeverity
+				}
+				if !cmd.Flags().Changed("fail-on") && prof.FailOn != "" {
+					failOn = prof.FailOn
+				}
+				if !cmd.Flags().Changed("output") && prof.OutputFormat != "" {
+					outputFmt = prof.OutputFormat
+				}
+			}
+
+			if err := validateFailOn(failOn); err != nil {
+				return err
 			}
 
 			db, err := store.Open(*dbPath)
@@ -768,15 +831,14 @@ func scanCmd(dbPath *string) *cobra.Command {
 			isText := outputFmt == "text"
 
 			if isText {
-				modeTag := ""
-				if baselineMode != "full" {
-					modeTag = " [baseline:" + baselineMode + "]"
-				}
 				fmt.Printf("\n╔══════════════════════════════════════════════════════╗\n")
 				fmt.Printf("║  argus scan: %-39s║\n", truncatePath(projectDir, 39))
 				fmt.Printf("║  %d dependencies found%-32s║\n", len(deps), "")
 				fmt.Printf("╚══════════════════════════════════════════════════════╝\n\n")
-				if modeTag != "" {
+				if profName != "" {
+					fmt.Printf("Profile: %s\n\n", profName)
+				}
+				if baselineMode != "full" {
 					fmt.Printf("Mode: baseline %s — reporting only new findings.\n\n", baselineMode)
 				}
 			}
@@ -844,6 +906,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
 	cmd.Flags().StringVar(&baselineMode, "baseline-mode", "full", "baseline mode: full (all findings), diff (new only), update (diff + save baseline)")
 	cmd.Flags().BoolVar(&multi, "multi", false, "scan multiple project directories; each positional arg is a project path (supports ./path/...)")
+	cmd.Flags().StringVar(&profileName, "profile", "", "named scan profile from .argus.yaml or built-in (default, fast, ci, thorough)")
 	return cmd
 }
 
@@ -985,6 +1048,94 @@ func pluginsListCmd() *cobra.Command {
 			fmt.Println()
 		},
 	}
+}
+
+// ── config ───────────────────────────────────────────────────────────────────
+
+func configCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config <subcommand>",
+		Short: "Manage Argus configuration and profiles",
+	}
+	cmd.AddCommand(configProfilesCmd())
+	return cmd
+}
+
+func configProfilesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profiles <subcommand>",
+		Short: "List and inspect named scan profiles",
+	}
+	cmd.AddCommand(configProfilesListCmd())
+	return cmd
+}
+
+func configProfilesListCmd() *cobra.Command {
+	var projectDir string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all available scan profiles",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _ := config.Load(projectDir)
+
+			names := cfg.AllProfileNames()
+			defaultName := cfg.DefaultProfile
+			if defaultName == "" {
+				defaultName = "default"
+			}
+
+			fmt.Printf("\n%s\n\n", col.Bold("Available scan profiles"))
+			t := tablewriter.NewWriter(os.Stdout)
+			t.Header("Name", "Workers", "Top-K", "Min-Similarity", "LLM Model", "Embed Model", "Min-Severity", "Fail-On", "Output", "Default")
+			for _, name := range names {
+				p, _ := cfg.ResolveProfile(name)
+				defMark := ""
+				if name == defaultName {
+					defMark = "✓"
+				}
+				sim := "—"
+				if p.SimilarityThreshold > 0 {
+					sim = fmt.Sprintf("%.2f", p.SimilarityThreshold)
+				}
+				workers := "—"
+				if p.Workers > 0 {
+					workers = fmt.Sprintf("%d", p.Workers)
+				}
+				topK := "—"
+				if p.TopK > 0 {
+					topK = fmt.Sprintf("%d", p.TopK)
+				}
+				llmModel := p.LLMModel
+				if llmModel == "" {
+					llmModel = "—"
+				}
+				embedModel := p.EmbedModel
+				if embedModel == "" {
+					embedModel = "—"
+				}
+				minSev := p.MinSeverity
+				if minSev == "" {
+					minSev = "—"
+				}
+				failOn := p.FailOn
+				if failOn == "" {
+					failOn = "—"
+				}
+				outFmt := p.OutputFormat
+				if outFmt == "" {
+					outFmt = "—"
+				}
+				_ = t.Append([]string{name, workers, topK, sim, llmModel, embedModel, minSev, failOn, outFmt, defMark})
+			}
+			_ = t.Render()
+			fmt.Printf("\nUsage: argus scan --profile <name> <project-dir>\n")
+			fmt.Printf("Set default_profile: <name> in .argus.yaml to use a profile automatically.\n\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&projectDir, "project-dir", ".", "directory containing .argus.yaml")
+	return cmd
 }
 
 // ── baseline ─────────────────────────────────────────────────────────────────
