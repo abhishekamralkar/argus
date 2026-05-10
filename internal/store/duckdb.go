@@ -65,6 +65,8 @@ func migrate(db *sql.DB) error {
 	// Additive migrations — safe to run on any existing DB.
 	migrations := []string{
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS aliases VARCHAR`,
+		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_score FLOAT`,
+		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_vector VARCHAR`,
 	}
 	for _, m := range migrations {
 		if _, err := db.ExecContext(context.Background(), m); err != nil {
@@ -88,14 +90,16 @@ func buildVulnContent(v *Vulnerability) string {
 func (s *DB) UpsertVulnMeta(ctx context.Context, v *Vulnerability) error {
 	aliases := strings.Join(v.Aliases, ",")
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content, cvss_score, cvss_vector)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
-			severity = excluded.severity,
-			fixed_in = excluded.fixed_in,
-			aliases  = excluded.aliases,
-			content  = excluded.content
-	`, v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, aliases, buildVulnContent(v))
+			severity    = excluded.severity,
+			fixed_in    = excluded.fixed_in,
+			aliases     = excluded.aliases,
+			content     = excluded.content,
+			cvss_score  = excluded.cvss_score,
+			cvss_vector = excluded.cvss_vector
+	`, v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, aliases, buildVulnContent(v), v.CVSSScore, v.CVSSVector)
 	return err
 }
 
@@ -251,6 +255,8 @@ func (s *DB) searchChunks(ctx context.Context, ecosystem string, embedding []flo
 		WITH scored AS (
 			SELECT c.vuln_id, v.ecosystem, v.package, v.severity, v.fixed_in,
 			       COALESCE(v.aliases,'') AS aliases, c.content,
+			       COALESCE(v.cvss_score, 0.0) AS cvss_score,
+			       COALESCE(v.cvss_vector, '') AS cvss_vector,
 			       array_cosine_similarity(c.embedding, %s::FLOAT[768]) AS score
 			FROM vulnerability_chunks c
 			JOIN vulnerabilities v ON c.vuln_id = v.id
@@ -261,7 +267,7 @@ func (s *DB) searchChunks(ctx context.Context, ecosystem string, embedding []flo
 			FROM scored
 			WHERE score > ?
 		)
-		SELECT vuln_id, ecosystem, package, severity, fixed_in, aliases, content, score
+		SELECT vuln_id, ecosystem, package, severity, fixed_in, aliases, content, score, cvss_score, cvss_vector
 		FROM ranked
 		WHERE rn = 1
 		ORDER BY score DESC
@@ -276,7 +282,7 @@ func (s *DB) searchChunks(ctx context.Context, ecosystem string, embedding []flo
 	for rows.Next() {
 		var r SearchResult
 		var aliasStr string
-		if err := rows.Scan(&r.ID, &r.Ecosystem, &r.Package, &r.Severity, &r.FixedIn, &aliasStr, &r.Content, &r.Score); err != nil {
+		if err := rows.Scan(&r.ID, &r.Ecosystem, &r.Package, &r.Severity, &r.FixedIn, &aliasStr, &r.Content, &r.Score, &r.CVSSScore, &r.CVSSVector); err != nil {
 			return nil, err
 		}
 		r.Aliases = splitAliases(aliasStr)
@@ -314,21 +320,24 @@ func (s *DB) Upsert(ctx context.Context, v *Vulnerability, embedding []float32) 
 }
 
 type SearchResult struct {
-	ID        string
-	Ecosystem string
-	Package   string
-	Severity  string
-	FixedIn   string
-	Aliases   []string
-	Content   string
-	Score     float64
+	ID         string
+	Ecosystem  string
+	Package    string
+	Severity   string
+	FixedIn    string
+	Aliases    []string
+	Content    string
+	Score      float64 // vector cosine-similarity score
+	CVSSScore  float64 // CVSS v3 base score (0 = not available)
+	CVSSVector string  // raw CVSS v3 vector string
 }
 
 func (s *DB) Search(ctx context.Context, ecosystem string, embedding []float32, limit int, threshold float64) ([]SearchResult, error) {
 	arr := floatSliceToArray(embedding)
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, ecosystem, package, severity, fixed_in, COALESCE(aliases,''), content,
-		       array_cosine_similarity(embedding, %s::FLOAT[768]) AS score
+		       array_cosine_similarity(embedding, %s::FLOAT[768]) AS score,
+		       COALESCE(cvss_score, 0.0), COALESCE(cvss_vector, '')
 		FROM vulnerabilities
 		WHERE ecosystem = ?
 		  AND array_cosine_similarity(embedding, %s::FLOAT[768]) > ?
@@ -344,7 +353,7 @@ func (s *DB) Search(ctx context.Context, ecosystem string, embedding []float32, 
 	for rows.Next() {
 		var r SearchResult
 		var aliasStr string
-		if err := rows.Scan(&r.ID, &r.Ecosystem, &r.Package, &r.Severity, &r.FixedIn, &aliasStr, &r.Content, &r.Score); err != nil {
+		if err := rows.Scan(&r.ID, &r.Ecosystem, &r.Package, &r.Severity, &r.FixedIn, &aliasStr, &r.Content, &r.Score, &r.CVSSScore, &r.CVSSVector); err != nil {
 			return nil, err
 		}
 		r.Aliases = splitAliases(aliasStr)
@@ -400,22 +409,24 @@ func (s *DB) UpsertBatch(ctx context.Context, batch []EmbeddedVuln) error {
 	defer func() { _ = tx.Rollback() }()
 
 	var sb strings.Builder
-	sb.WriteString("INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content, embedding) VALUES ")
-	args := make([]any, 0, len(batch)*7)
+	sb.WriteString("INSERT INTO vulnerabilities (id, ecosystem, package, severity, fixed_in, aliases, content, cvss_score, cvss_vector, embedding) VALUES ")
+	args := make([]any, 0, len(batch)*9)
 	for i, item := range batch {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		fmt.Fprintf(&sb, "(?,?,?,?,?,?,?,%s::FLOAT[768])", floatSliceToArray(item.Embedding))
+		fmt.Fprintf(&sb, "(?,?,?,?,?,?,?,?,?,%s::FLOAT[768])", floatSliceToArray(item.Embedding))
 		v := item.Vuln
-		args = append(args, v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, strings.Join(v.Aliases, ","), buildVulnContent(v))
+		args = append(args, v.ID, v.Ecosystem, v.Package, v.Severity, v.FixedIn, strings.Join(v.Aliases, ","), buildVulnContent(v), v.CVSSScore, v.CVSSVector)
 	}
 	sb.WriteString(` ON CONFLICT (id) DO UPDATE SET
-		severity  = excluded.severity,
-		fixed_in  = excluded.fixed_in,
-		aliases   = excluded.aliases,
-		content   = excluded.content,
-		embedding = excluded.embedding`)
+		severity    = excluded.severity,
+		fixed_in    = excluded.fixed_in,
+		aliases     = excluded.aliases,
+		content     = excluded.content,
+		cvss_score  = excluded.cvss_score,
+		cvss_vector = excluded.cvss_vector,
+		embedding   = excluded.embedding`)
 
 	if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 		return err

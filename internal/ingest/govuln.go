@@ -67,20 +67,39 @@ func LoadGoVulnDB(c *cache.Cache, fn func(*store.Vulnerability) error) error {
 				return nil
 			}
 
+			cvssScore, cvssVector := cvssFromGoVuln(&rec)
 			v := &store.Vulnerability{
-				ID:        rec.ID,
-				Ecosystem: "go",
-				Package:   pkg,
-				Aliases:   rec.Aliases,
-				Summary:   rec.Summary,
-				Details:   rec.Details,
-				Severity:  severityFromGoVuln(&rec),
-				FixedIn:   fixedIn,
-				Published: rec.Published,
+				ID:         rec.ID,
+				Ecosystem:  "go",
+				Package:    pkg,
+				Aliases:    rec.Aliases,
+				Summary:    rec.Summary,
+				Details:    rec.Details,
+				Severity:   severityFromGoVuln(&rec),
+				FixedIn:    fixedIn,
+				Published:  rec.Published,
+				CVSSScore:  cvssScore,
+				CVSSVector: cvssVector,
 			}
 			return fn(v)
 		},
 	)
+}
+
+// cvssFromGoVuln returns the highest CVSS v3 numeric score and its vector string
+// from a GoVulnDB record. Returns (0, "") when no CVSS v3 data is present.
+func cvssFromGoVuln(rec *goVulnRecord) (score float64, vector string) {
+	var best float64
+	var vec string
+	for _, s := range rec.Severity {
+		if s.Type == "CVSS_V3" && strings.HasPrefix(s.Score, "CVSS:3") {
+			if score, ok := cvssV3BaseScore(s.Score); ok && score > best {
+				best = score
+				vec = s.Score
+			}
+		}
+	}
+	return best, vec
 }
 
 // severityFromGoVuln extracts a severity label from a GoVulnDB record.

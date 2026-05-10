@@ -80,6 +80,8 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 	}
 
 	severity := ""
+	var bestCVSSScore float64
+	var bestCVSSVector string
 	for _, s := range r.Severity {
 		var sev string
 		// Try plain label first; fall back to CVSS vector computation.
@@ -87,6 +89,10 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 			sev = norm
 		} else if score, ok := cvssV3BaseScore(s.Score); ok {
 			sev = cvssScoreToSeverity(score)
+			if score > bestCVSSScore {
+				bestCVSSScore = score
+				bestCVSSVector = s.Score
+			}
 		}
 		if osvSeverityRank[sev] > osvSeverityRank[severity] {
 			severity = sev
@@ -94,15 +100,17 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 	}
 
 	return &store.Vulnerability{
-		ID:        r.ID,
-		Ecosystem: ecosystem,
-		Package:   pkg,
-		Aliases:   r.Aliases,
-		Summary:   r.Summary,
-		Details:   r.Details,
-		Severity:  severity,
-		FixedIn:   fixedIn,
-		Published: r.Published,
+		ID:         r.ID,
+		Ecosystem:  ecosystem,
+		Package:    pkg,
+		Aliases:    r.Aliases,
+		Summary:    r.Summary,
+		Details:    r.Details,
+		Severity:   severity,
+		FixedIn:    fixedIn,
+		Published:  r.Published,
+		CVSSScore:  bestCVSSScore,
+		CVSSVector: bestCVSSVector,
 	}
 }
 

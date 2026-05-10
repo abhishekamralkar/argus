@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,33 @@ import (
 var Version = "dev"
 
 var validFailOnValues = map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
+
+// validateFailOn accepts severity labels (LOW–CRITICAL) and "cvss:N.N" format.
+func validateFailOn(s string) error {
+	if validFailOnValues[strings.ToUpper(s)] {
+		return nil
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "cvss:") {
+		val := s[5:]
+		score, err := strconv.ParseFloat(val, 64)
+		if err != nil || score < 0 || score > 10 {
+			return fmt.Errorf("--fail-on cvss: threshold must be a number 0.0–10.0 (got %q)", val)
+		}
+		return nil
+	}
+	return fmt.Errorf("--fail-on must be LOW, MEDIUM, HIGH, CRITICAL, or cvss:N.N (got %q)", s)
+}
+
+// failOnExceeded returns true when a result's severity or CVSS score meets the
+// --fail-on threshold. The cvss: form only triggers when a score is known (>0).
+func failOnExceeded(r rag.Result, failOn string) bool {
+	if strings.HasPrefix(strings.ToLower(failOn), "cvss:") {
+		threshold, _ := strconv.ParseFloat(failOn[5:], 64)
+		return r.TopCVSSScore > 0 && r.TopCVSSScore >= threshold
+	}
+	return exceedsSeverity(r.Verdict(), strings.ToUpper(failOn))
+}
 
 func main() {
 	root := &cobra.Command{
@@ -544,12 +572,14 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var enhanceQuery bool
 	var workers int
 	var minSeverity string
+	var minCVSS float64
 	var failOn string
 	var timeoutMin int
 	var similarityThreshold float64
 	var topK int
 	var baselineMode string
 	var multi bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -565,10 +595,9 @@ func scanCmd(dbPath *string) *cobra.Command {
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !validFailOnValues[strings.ToUpper(failOn)] {
-				return fmt.Errorf("--fail-on must be one of LOW, MEDIUM, HIGH, CRITICAL (got %q)", failOn)
+			if err := validateFailOn(failOn); err != nil {
+				return err
 			}
-			failOn = strings.ToUpper(failOn)
 
 			baselineMode = strings.ToLower(baselineMode)
 			if !validBaselineModes[baselineMode] {
@@ -626,11 +655,13 @@ func scanCmd(dbPath *string) *cobra.Command {
 					outputFmt:           outputFmt,
 					workers:             workers,
 					minSeverity:         minSeverity,
+					minCVSS:             minCVSS,
 					failOn:              failOn,
 					enhanceQuery:        enhanceQuery,
 					similarityThreshold: similarityThreshold,
 					topK:                topK,
 					baselineMode:        baselineMode,
+					verbose:             verbose,
 				})
 			}
 
@@ -645,6 +676,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 			engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
 				EnhanceQuery:        enhanceQuery,
 				MinSeverity:         minSeverity,
+				MinCVSS:             minCVSS,
 				SimilarityThreshold: similarityThreshold,
 				TopK:                topK,
 				IgnoreList:          ignoreList,
@@ -705,11 +737,11 @@ func scanCmd(dbPath *string) *cobra.Command {
 			case "spdx":
 				return output.WriteSPDX(os.Stdout, results, filepath.Base(projectDir))
 			default:
-				printSummaryTable(results)
+				printSummaryTable(results, verbose)
 			}
 
 			for _, r := range results {
-				if exceedsSeverity(r.Verdict(), failOn) {
+				if failOnExceeded(r, failOn) {
 					os.Exit(1)
 				}
 			}
@@ -724,7 +756,9 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&enhanceQuery, "enhance-query", false, "use LLM to expand search queries before embedding")
 	cmd.Flags().IntVar(&workers, "workers", 4, "parallel dependency analysis workers")
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL")
-	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "minimum severity that causes non-zero exit: LOW, MEDIUM, HIGH, CRITICAL")
+	cmd.Flags().StringVar(&failOn, "fail-on", "HIGH", "severity or CVSS threshold for non-zero exit: LOW, MEDIUM, HIGH, CRITICAL, or cvss:N.N")
+	cmd.Flags().Float64Var(&minCVSS, "min-cvss", 0, "minimum CVSS v3 base score to report (0 = report all)")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "show per-dependency analysis and CVSS scores in summary table")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
@@ -1071,24 +1105,37 @@ func doctorCmd(dbPath *string) *cobra.Command {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func printSummaryTable(results []rag.Result) {
+func printSummaryTable(results []rag.Result, verbose bool) {
 	fmt.Printf("\n%s\n\n", col.Bold("SCAN SUMMARY"))
 
 	t := tablewriter.NewWriter(os.Stdout)
-	t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Verdict")
+	if verbose {
+		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Top CVSS", "Verdict")
+	} else {
+		t.Header("Package", "Version", "Ecosystem", "CVEs Found", "Top Severity", "Verdict")
+	}
 	for _, r := range results {
 		sev := r.TopSeverity
 		if sev == "" {
 			sev = "—"
 		}
-		_ = t.Append([]string{
-			r.Dep.Name,
-			r.Dep.Version,
-			r.Dep.Ecosystem,
-			fmt.Sprintf("%d", r.RetrievedCount),
-			col.Severity(sev),
-			col.Verdict(r.Verdict()),
-		})
+		if verbose {
+			cvss := "—"
+			if r.TopCVSSScore > 0 {
+				cvss = fmt.Sprintf("%.1f", r.TopCVSSScore)
+			}
+			_ = t.Append([]string{
+				r.Dep.Name, r.Dep.Version, r.Dep.Ecosystem,
+				fmt.Sprintf("%d", r.RetrievedCount),
+				col.Severity(sev), cvss, col.Verdict(r.Verdict()),
+			})
+		} else {
+			_ = t.Append([]string{
+				r.Dep.Name, r.Dep.Version, r.Dep.Ecosystem,
+				fmt.Sprintf("%d", r.RetrievedCount),
+				col.Severity(sev), col.Verdict(r.Verdict()),
+			})
+		}
 	}
 	_ = t.Render()
 }

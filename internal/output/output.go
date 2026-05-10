@@ -18,22 +18,25 @@ type JSONReport struct {
 }
 
 type JSONResult struct {
-	Package   string        `json:"package"`
-	Version   string        `json:"version"`
-	Ecosystem string        `json:"ecosystem"`
-	Verdict   string        `json:"verdict"`
-	Severity  string        `json:"severity,omitempty"`
-	CVECount  int           `json:"cve_count"`
-	Findings  []JSONFinding `json:"findings,omitempty"`
+	Package      string        `json:"package"`
+	Version      string        `json:"version"`
+	Ecosystem    string        `json:"ecosystem"`
+	Verdict      string        `json:"verdict"`
+	Severity     string        `json:"severity,omitempty"`
+	CVECount     int           `json:"cve_count"`
+	TopCVSSScore float64       `json:"top_cvss_score,omitempty"`
+	Findings     []JSONFinding `json:"findings,omitempty"`
 }
 
 type JSONFinding struct {
-	ID       string  `json:"id"`
-	Package  string  `json:"package"`
-	Severity string  `json:"severity,omitempty"`
-	FixedIn  string  `json:"fixed_in,omitempty"`
-	Score    float64 `json:"score"`
-	Summary  string  `json:"summary,omitempty"`
+	ID         string  `json:"id"`
+	Package    string  `json:"package"`
+	Severity   string  `json:"severity,omitempty"`
+	CVSSScore  float64 `json:"cvss_score,omitempty"`
+	CVSSVector string  `json:"cvss_vector,omitempty"`
+	FixedIn    string  `json:"fixed_in,omitempty"`
+	Score      float64 `json:"score"`
+	Summary    string  `json:"summary,omitempty"`
 }
 
 // BuildJSONResults converts a slice of rag.Result to []JSONResult.
@@ -42,21 +45,24 @@ func BuildJSONResults(results []rag.Result) []JSONResult {
 	out := make([]JSONResult, len(results))
 	for i, r := range results {
 		jr := JSONResult{
-			Package:   r.Dep.Name,
-			Version:   r.Dep.Version,
-			Ecosystem: r.Dep.Ecosystem,
-			Verdict:   r.Verdict(),
-			Severity:  r.TopSeverity,
-			CVECount:  r.RetrievedCount,
+			Package:      r.Dep.Name,
+			Version:      r.Dep.Version,
+			Ecosystem:    r.Dep.Ecosystem,
+			Verdict:      r.Verdict(),
+			Severity:     r.TopSeverity,
+			CVECount:     r.RetrievedCount,
+			TopCVSSScore: r.TopCVSSScore,
 		}
 		for _, f := range r.Findings {
 			jr.Findings = append(jr.Findings, JSONFinding{
-				ID:       f.ID,
-				Package:  f.Package,
-				Severity: f.Severity,
-				FixedIn:  f.FixedIn,
-				Score:    f.Score,
-				Summary:  truncate(f.Content, 300),
+				ID:         f.ID,
+				Package:    f.Package,
+				Severity:   f.Severity,
+				CVSSScore:  f.CVSSScore,
+				CVSSVector: f.CVSSVector,
+				FixedIn:    f.FixedIn,
+				Score:      f.Score,
+				Summary:    truncate(f.Content, 300),
 			})
 		}
 		out[i] = jr
@@ -106,7 +112,8 @@ type sarifRule struct {
 }
 
 type sarifRuleProps struct {
-	Severity string `json:"security-severity"`
+	Severity  string  `json:"security-severity"`
+	CVSSScore float64 `json:"cvssScore,omitempty"`
 }
 
 type sarifResult struct {
@@ -189,7 +196,10 @@ func buildRules(results []rag.Result) []sarifRule {
 				ID:               f.ID,
 				Name:             f.ID,
 				ShortDescription: sarifMessage{Text: truncate(f.Content, 200)},
-				Properties:       sarifRuleProps{Severity: severityScore(f.Severity)},
+				Properties: sarifRuleProps{
+					Severity:  severityScore(f.Severity),
+					CVSSScore: f.CVSSScore,
+				},
 			})
 		}
 	}
