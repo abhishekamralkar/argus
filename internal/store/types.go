@@ -2,6 +2,19 @@ package store
 
 import "time"
 
+// ScanRun records the aggregate outcome of a single argus scan invocation.
+type ScanRun struct {
+	ID            string
+	ProjectDir    string
+	ScannedAt     time.Time
+	DepCount      int
+	TotalFindings int
+	CriticalCount int
+	HighCount     int
+	MediumCount   int
+	LowCount      int
+}
+
 type Vulnerability struct {
 	ID         string
 	Ecosystem  string

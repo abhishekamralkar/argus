@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Argus Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+a{color:#58a6ff;text-decoration:none}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:14px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:1.1rem;font-weight:600;color:#e6edf3}
+header .db-path{font-size:.8rem;color:#8b949e;margin-left:auto}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600}
+.badge-critical{background:#3d1a1a;color:#f85149}
+.badge-high{background:#2d1f00;color:#f0883e}
+.badge-medium{background:#2c2000;color:#e3b341}
+.badge-low{background:#0d2818;color:#3fb950}
+.badge-ok{background:#1a2740;color:#58a6ff}
+main{max-width:1200px;margin:0 auto;padding:24px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:28px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:18px}
+.card-label{font-size:.75rem;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.card-value{font-size:1.6rem;font-weight:700;color:#e6edf3}
+section{background:#161b22;border:1px solid #30363d;border-radius:8px;margin-bottom:24px;overflow:hidden}
+section h2{padding:14px 18px;font-size:.9rem;font-weight:600;color:#e6edf3;border-bottom:1px solid #30363d;background:#161b22}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{padding:10px 14px;text-align:left;font-weight:600;color:#8b949e;background:#0d1117;border-bottom:1px solid #21262d;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #21262d;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#1c2128}
+.empty{padding:32px;text-align:center;color:#8b949e;font-size:.9rem}
+.loading{padding:32px;text-align:center;color:#8b949e}
+</style>
+</head>
+<body>
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  <h1>Argus Security Dashboard</h1>
+  <span class="db-path" id="db-path"></span>
+</header>
+<main>
+  <div class="cards" id="stat-cards">
+    <div class="card"><div class="card-label">Vulnerabilities</div><div class="card-value" id="stat-vulns">—</div></div>
+    <div class="card"><div class="card-label">Ecosystems</div><div class="card-value" id="stat-ecosystems">—</div></div>
+    <div class="card"><div class="card-label">Scan Runs</div><div class="card-value" id="stat-runs">—</div></div>
+    <div class="card"><div class="card-label">Last Ingest</div><div class="card-value" id="stat-ingest" style="font-size:1rem;padding-top:4px">—</div></div>
+  </div>
+
+  <section>
+    <h2>Recent Scan History</h2>
+    <div id="scans-container"><div class="loading">Loading…</div></div>
+  </section>
+
+  <section>
+    <h2>Vulnerability Database</h2>
+    <div id="db-container"><div class="loading">Loading…</div></div>
+  </section>
+</main>
+<script>
+function sev(n,cls){return n>0?`<span class="badge badge-${cls}">${n}</span>`:`<span style="color:#484f58">0</span>`}
+
+function fmtDate(iso){
+  const d=new Date(iso);
+  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function renderScans(runs){
+  const el=document.getElementById('scans-container');
+  if(!runs||runs.length===0){
+    el.innerHTML='<div class="empty">No scan history yet. Run <code>argus scan &lt;project-dir&gt;</code> to record your first scan.</div>';
+    return;
+  }
+  document.getElementById('stat-runs').textContent=runs.length;
+  let rows=runs.map(r=>{
+    const proj=r.project_dir.length>48?'…'+r.project_dir.slice(-45):r.project_dir;
+    return `<tr>
+      <td title="${r.scanned_at}">${fmtDate(r.scanned_at)}</td>
+      <td title="${r.project_dir}">${proj}</td>
+      <td>${r.dep_count}</td>
+      <td>${r.total_findings}</td>
+      <td>${sev(r.critical_count,'critical')}</td>
+      <td>${sev(r.high_count,'high')}</td>
+      <td>${sev(r.medium_count,'medium')}</td>
+      <td>${sev(r.low_count,'low')}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`<table><thead><tr><th>Date</th><th>Project</th><th>Deps</th><th>Total</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderDB(status){
+  const el=document.getElementById('db-container');
+  if(!status||!status.ecosystems||status.ecosystems.length===0){
+    el.innerHTML='<div class="empty">Database is empty. Run <code>argus ingest</code> to populate it.</div>';
+    return;
+  }
+  let total=0;
+  let lastIngest='—';
+  let rows=status.ecosystems.map(e=>{
+    total+=e.vuln_count;
+    if(e.last_ingest&&e.last_ingest!=='—'&&(lastIngest==='—'||e.last_ingest>lastIngest)) lastIngest=e.last_ingest;
+    return `<tr><td>${e.ecosystem}</td><td>${e.vuln_count.toLocaleString()}</td><td>${e.chunk_count.toLocaleString()}</td><td>${e.last_ingest||'—'}</td></tr>`;
+  }).join('');
+  document.getElementById('stat-vulns').textContent=total.toLocaleString();
+  document.getElementById('stat-ecosystems').textContent=status.ecosystems.length;
+  document.getElementById('stat-ingest').textContent=lastIngest==='—'?'—':fmtDate(lastIngest);
+  el.innerHTML=`<table><thead><tr><th>Ecosystem</th><th>Vulnerabilities</th><th>Chunks</th><th>Last Ingest</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function load(){
+  try{
+    const [statusRes,scansRes]=await Promise.all([
+      fetch('/api/v1/status'),
+      fetch('/api/v1/scans')
+    ]);
+    const status=await statusRes.json();
+    const scans=await scansRes.json();
+    if(status.db_path) document.getElementById('db-path').textContent=status.db_path;
+    renderDB(status);
+    renderScans(scans);
+  }catch(e){
+    document.getElementById('scans-container').innerHTML=`<div class="empty">Error loading data: ${e.message}</div>`;
+  }
+}
+load();
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"github.com/abhishekamralkar/argus/internal/parser"
 	"github.com/abhishekamralkar/argus/internal/rag"
 	"github.com/abhishekamralkar/argus/internal/store"
+	"github.com/abhishekamralkar/argus/internal/web"
 	"github.com/abhishekamralkar/argus/pkg/plugin"
 )
 
@@ -104,6 +106,7 @@ func main() {
 	root.AddCommand(baselineCmd(&dbPath))
 	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(pluginsCmd())
+	root.AddCommand(serveCmd(&dbPath))
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -806,6 +809,11 @@ func scanCmd(dbPath *string) *cobra.Command {
 				results = filterFixesOnly(results)
 			}
 
+			// Persist scan history (non-fatal on failure).
+			if err := db.SaveScanRun(ctx, buildScanRun(projectDir, results)); err != nil {
+				slog.Warn("could not save scan history", "error", err)
+			}
+
 			switch outputFmt {
 			case "json":
 				return output.WriteJSON(os.Stdout, results)
@@ -1183,6 +1191,32 @@ func doctorCmd(dbPath *string) *cobra.Command {
 	return cmd
 }
 
+// ── serve ─────────────────────────────────────────────────────────────────────
+
+func serveCmd(dbPath *string) *cobra.Command {
+	var port int
+	var host string
+	var readOnly bool
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the Argus web dashboard",
+		Long:  "Starts an embedded HTTP server with a vulnerability dashboard at http://host:port.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return web.Serve(web.Config{
+				DBPath:   *dbPath,
+				Host:     host,
+				Port:     port,
+				ReadOnly: readOnly,
+			})
+		},
+	}
+	cmd.Flags().IntVar(&port, "port", 8080, "port to listen on")
+	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "host/address to bind")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "disable all write operations via the dashboard")
+	return cmd
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 // filterFixesOnly returns only results that have at least one finding with a
@@ -1244,4 +1278,37 @@ func truncatePath(s string, maxLen int) string {
 		return s
 	}
 	return "..." + s[len(s)-(maxLen-3):]
+}
+
+// buildScanRun aggregates scan results into a ScanRun record for history storage.
+func buildScanRun(projectDir string, results []rag.Result) store.ScanRun {
+	counts := map[string]int{"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+	totalFindings := 0
+	for _, r := range results {
+		totalFindings += r.RetrievedCount
+		if n, ok := counts[r.TopSeverity]; ok {
+			counts[r.TopSeverity] = n + 1
+		}
+	}
+	return store.ScanRun{
+		ID:            newScanRunID(),
+		ProjectDir:    projectDir,
+		ScannedAt:     time.Now().UTC(),
+		DepCount:      len(results),
+		TotalFindings: totalFindings,
+		CriticalCount: counts["CRITICAL"],
+		HighCount:     counts["HIGH"],
+		MediumCount:   counts["MEDIUM"],
+		LowCount:      counts["LOW"],
+	}
+}
+
+// newScanRunID generates a random UUID v4 for scan run records.
+func newScanRunID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
