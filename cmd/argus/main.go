@@ -19,6 +19,7 @@ import (
 	"github.com/abhishekamralkar/argus/internal/baseline"
 	col "github.com/abhishekamralkar/argus/internal/color"
 	"github.com/abhishekamralkar/argus/internal/config"
+	"github.com/abhishekamralkar/argus/internal/doctor"
 	"github.com/abhishekamralkar/argus/internal/embed"
 	"github.com/abhishekamralkar/argus/internal/ignore"
 	"github.com/abhishekamralkar/argus/internal/ingest"
@@ -48,6 +49,7 @@ func main() {
 	root.AddCommand(searchCmd(&dbPath))
 	root.AddCommand(statusCmd(&dbPath))
 	root.AddCommand(baselineCmd(&dbPath))
+	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(versionCmd())
 	root.AddCommand(completionCmd(root))
 
@@ -933,6 +935,59 @@ func searchCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", "Ollama embedding model (default: nomic-embed-text)")
 	cmd.Flags().IntVar(&limit, "limit", 10, "maximum results to return")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1)")
+	return cmd
+}
+
+// ── doctor ───────────────────────────────────────────────────────────────────
+
+func doctorCmd(dbPath *string) *cobra.Command {
+	var projectDir string
+	var llmModel string
+	var embedModel string
+	var llmBaseURL string
+	var embedBaseURL string
+
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Validate Argus setup: config, database, and LLM connectivity",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			cfg := doctor.Config{
+				DBPath:       *dbPath,
+				ProjectDir:   projectDir,
+				LLMModel:     llmModel,
+				EmbedModel:   embedModel,
+				LLMBaseURL:   llmBaseURL,
+				EmbedBaseURL: embedBaseURL,
+			}
+			checks := doctor.Run(ctx, cfg)
+
+			fmt.Println()
+			allOK := true
+			for _, c := range checks {
+				if c.OK {
+					fmt.Printf("  %s %s — %s\n", col.Green("✓"), c.Name, c.Detail)
+				} else {
+					fmt.Printf("  %s %s — %s\n", col.Red("✗"), c.Name, c.Detail)
+					if c.Hint != "" {
+						fmt.Printf("    → %s\n", c.Hint)
+					}
+					allOK = false
+				}
+			}
+			fmt.Println()
+
+			if !allOK {
+				return fmt.Errorf("one or more checks failed")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&projectDir, "project-dir", ".", "directory to check for .argus.yaml and .argusignore")
+	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model name to check (default: llama3.1:8b or gpt-4o-mini)")
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", "embedding model name to check (default: nomic-embed-text or text-embedding-3-small)")
+	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
+	cmd.Flags().StringVar(&embedBaseURL, "embed-base-url", "", "embedding API base URL; overrides OPENAI_BASE_URL / OLLAMA_HOST")
 	return cmd
 }
 

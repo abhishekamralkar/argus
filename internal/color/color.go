@@ -59,6 +59,14 @@ func Green(s string) string {
 	return color.New(color.FgGreen).Sprint(s)
 }
 
+// Red returns a red-colored string.
+func Red(s string) string {
+	if noColor {
+		return s
+	}
+	return color.New(color.FgRed).Sprint(s)
+}
+
 // Bold returns a bold string.
 func Bold(format string, args ...any) string {
 	if noColor {
