@@ -979,6 +979,12 @@ go test ./internal/parser/... -v
 
 ---
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned features and future direction.
+
+---
+
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
