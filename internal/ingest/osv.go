@@ -109,6 +109,7 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 		Severity:   severity,
 		FixedIn:    fixedIn,
 		Published:  r.Published,
+		Modified:   r.Modified,
 		CVSSScore:  bestCVSSScore,
 		CVSSVector: bestCVSSVector,
 	}

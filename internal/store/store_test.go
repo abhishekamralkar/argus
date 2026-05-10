@@ -371,5 +371,45 @@ func BenchmarkSearch(b *testing.B) {
 	}
 }
 
+func TestGetLastIngest(t *testing.T) {
+	db := openTemp(t)
+
+	// No record yet — should return (zero, false, nil).
+	ts, ok, err := db.GetLastIngest(bg, "OSV/Go")
+	if err != nil {
+		t.Fatalf("GetLastIngest (no record): %v", err)
+	}
+	if ok {
+		t.Error("GetLastIngest: expected ok=false before any ingest")
+	}
+	if !ts.IsZero() {
+		t.Errorf("GetLastIngest: expected zero time, got %v", ts)
+	}
+
+	// Touch the log, then retrieve.
+	if err := db.TouchIngestLog(bg, "OSV/Go"); err != nil {
+		t.Fatalf("TouchIngestLog: %v", err)
+	}
+	ts, ok, err = db.GetLastIngest(bg, "OSV/Go")
+	if err != nil {
+		t.Fatalf("GetLastIngest (after touch): %v", err)
+	}
+	if !ok {
+		t.Error("GetLastIngest: expected ok=true after ingest")
+	}
+	if ts.IsZero() {
+		t.Error("GetLastIngest: expected non-zero time after ingest")
+	}
+
+	// Different source should still return false.
+	_, ok, err = db.GetLastIngest(bg, "GoVulnDB")
+	if err != nil {
+		t.Fatalf("GetLastIngest (different source): %v", err)
+	}
+	if ok {
+		t.Error("GetLastIngest: expected ok=false for untouched source")
+	}
+}
+
 // Ensure os is used (for TempDir fallback reference)
 var _ = os.DevNull
