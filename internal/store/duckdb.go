@@ -70,6 +70,18 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS aliases VARCHAR`,
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_score FLOAT`,
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_vector VARCHAR`,
+		`CREATE TABLE IF NOT EXISTS scan_runs (
+			id             TEXT        NOT NULL,
+			project_dir    TEXT        NOT NULL,
+			scanned_at     TIMESTAMPTZ NOT NULL,
+			dep_count      INTEGER     NOT NULL DEFAULT 0,
+			total_findings INTEGER     NOT NULL DEFAULT 0,
+			critical_count INTEGER     NOT NULL DEFAULT 0,
+			high_count     INTEGER     NOT NULL DEFAULT 0,
+			medium_count   INTEGER     NOT NULL DEFAULT 0,
+			low_count      INTEGER     NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_scan_runs_at ON scan_runs (scanned_at DESC)`,
 	}
 	for _, m := range migrations {
 		if _, err := db.ExecContext(context.Background(), m); err != nil {
@@ -485,6 +497,52 @@ func (s *DB) UpsertBatch(ctx context.Context, batch []EmbeddedVuln) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// SaveScanRun persists the aggregate result of one scan invocation.
+func (s *DB) SaveScanRun(ctx context.Context, r ScanRun) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO scan_runs
+			(id, project_dir, scanned_at, dep_count, total_findings,
+			 critical_count, high_count, medium_count, low_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.ID, r.ProjectDir, r.ScannedAt,
+		r.DepCount, r.TotalFindings,
+		r.CriticalCount, r.HighCount, r.MediumCount, r.LowCount)
+	return err
+}
+
+// ListScanRuns returns the most recent scan runs (newest first), up to limit.
+func (s *DB) ListScanRuns(ctx context.Context, limit int) ([]ScanRun, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_dir, scanned_at,
+		       dep_count, total_findings,
+		       critical_count, high_count, medium_count, low_count
+		FROM scan_runs
+		ORDER BY scanned_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ScanRun
+	for rows.Next() {
+		var r ScanRun
+		if err := rows.Scan(
+			&r.ID, &r.ProjectDir, &r.ScannedAt,
+			&r.DepCount, &r.TotalFindings,
+			&r.CriticalCount, &r.HighCount, &r.MediumCount, &r.LowCount,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // floatSliceToArray converts []float32 to a DuckDB array literal string.

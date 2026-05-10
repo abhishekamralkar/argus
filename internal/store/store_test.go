@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 var bg = context.Background()
@@ -413,3 +415,85 @@ func TestGetLastIngest(t *testing.T) {
 
 // Ensure os is used (for TempDir fallback reference)
 var _ = os.DevNull
+
+func TestSaveAndListScanRuns(t *testing.T) {
+	db := openTemp(t)
+
+	// Empty table returns empty slice, not error.
+	runs, err := db.ListScanRuns(bg, 10)
+	if err != nil {
+		t.Fatalf("ListScanRuns on empty table: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("expected 0 runs, got %d", len(runs))
+	}
+
+	// Save two runs.
+	r1 := ScanRun{
+		ID:            "id-1",
+		ProjectDir:    "/proj/a",
+		ScannedAt:     testTime(t, "2024-01-01T10:00:00Z"),
+		DepCount:      5,
+		TotalFindings: 3,
+		HighCount:     2,
+		MediumCount:   1,
+	}
+	r2 := ScanRun{
+		ID:            "id-2",
+		ProjectDir:    "/proj/b",
+		ScannedAt:     testTime(t, "2024-01-02T10:00:00Z"),
+		DepCount:      10,
+		TotalFindings: 0,
+	}
+	if err := db.SaveScanRun(bg, r1); err != nil {
+		t.Fatalf("SaveScanRun r1: %v", err)
+	}
+	if err := db.SaveScanRun(bg, r2); err != nil {
+		t.Fatalf("SaveScanRun r2: %v", err)
+	}
+
+	// List returns newest first.
+	runs, err = db.ListScanRuns(bg, 10)
+	if err != nil {
+		t.Fatalf("ListScanRuns: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(runs))
+	}
+	if runs[0].ID != "id-2" {
+		t.Errorf("expected newest first: runs[0].ID = %q, want id-2", runs[0].ID)
+	}
+	if runs[1].HighCount != 2 {
+		t.Errorf("runs[1].HighCount = %d, want 2", runs[1].HighCount)
+	}
+}
+
+func TestListScanRuns_Limit(t *testing.T) {
+	db := openTemp(t)
+	for i := range 5 {
+		r := ScanRun{
+			ID:         fmt.Sprintf("id-%d", i),
+			ProjectDir: "/proj",
+			ScannedAt:  testTime(t, "2024-01-01T00:00:00Z"),
+		}
+		if err := db.SaveScanRun(bg, r); err != nil {
+			t.Fatalf("SaveScanRun: %v", err)
+		}
+	}
+	runs, err := db.ListScanRuns(bg, 3)
+	if err != nil {
+		t.Fatalf("ListScanRuns: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Errorf("expected 3 (limited), got %d", len(runs))
+	}
+}
+
+func testTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse time %q: %v", s, err)
+	}
+	return ts
+}
