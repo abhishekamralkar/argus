@@ -49,6 +49,14 @@ func Load(dir string) (*List, error) {
 	return l, scanner.Err()
 }
 
+// Empty returns an empty ignore list with no suppressions.
+func Empty() *List {
+	return &List{
+		ids:      make(map[string]bool),
+		packages: make(map[string]bool),
+	}
+}
+
 // VulnID returns true if this advisory ID is on the ignore list.
 func (l *List) VulnID(id string) bool {
 	return l.ids[strings.ToUpper(id)]

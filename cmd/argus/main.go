@@ -514,14 +514,22 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var similarityThreshold float64
 	var topK int
 	var baselineMode string
+	var multi bool
 
 	cmd := &cobra.Command{
-		Use:   "scan <project-dir>",
+		Use:   "scan [flags] <project-dir>",
 		Short: "Scan a project's dependency files for vulnerabilities",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			isMulti, _ := cmd.Flags().GetBool("multi")
+			if isMulti {
+				if len(args) == 0 {
+					return fmt.Errorf("--multi requires at least one project path argument")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			projectDir := args[0]
-
 			if !validFailOnValues[strings.ToUpper(failOn)] {
 				return fmt.Errorf("--fail-on must be one of LOW, MEDIUM, HIGH, CRITICAL (got %q)", failOn)
 			}
@@ -539,8 +547,14 @@ func scanCmd(dbPath *string) *cobra.Command {
 				defer cancel()
 			}
 
-			// Load config file; CLI flags take precedence
-			cfg, _ := config.Load(projectDir)
+			// In multi mode load config from cwd; in single mode load from the project dir.
+			configDir := "."
+			if !multi {
+				configDir = args[0]
+			}
+
+			// Load config file; CLI flags take precedence.
+			cfg, _ := config.Load(configDir)
 			if llmModel == "" {
 				llmModel = cfg.LLMModel
 			}
@@ -569,13 +583,30 @@ func scanCmd(dbPath *string) *cobra.Command {
 			}
 			defer func() { _ = db.Close() }()
 
+			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
+			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
+
+			if multi {
+				return runMultiScan(ctx, args, db, embedder, generator, multiScanOpts{
+					outputFmt:           outputFmt,
+					workers:             workers,
+					minSeverity:         minSeverity,
+					failOn:              failOn,
+					enhanceQuery:        enhanceQuery,
+					similarityThreshold: similarityThreshold,
+					topK:                topK,
+					baselineMode:        baselineMode,
+				})
+			}
+
+			// ── single-project scan ───────────────────────────────────────────
+			projectDir := args[0]
+
 			ignoreList, err := ignore.Load(projectDir)
 			if err != nil {
 				return fmt.Errorf("load ignore list: %w", err)
 			}
 
-			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
-			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
 			engine := rag.NewEngine(db, embedder, generator, rag.EngineConfig{
 				EnhanceQuery:        enhanceQuery,
 				MinSeverity:         minSeverity,
@@ -663,6 +694,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
 	cmd.Flags().StringVar(&baselineMode, "baseline-mode", "full", "baseline mode: full (all findings), diff (new only), update (diff + save baseline)")
+	cmd.Flags().BoolVar(&multi, "multi", false, "scan multiple project directories; each positional arg is a project path (supports ./path/...)")
 	return cmd
 }
 
