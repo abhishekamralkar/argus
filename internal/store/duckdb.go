@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,6 +126,40 @@ func (s *DB) GetLastIngest(ctx context.Context, source string) (time.Time, bool,
 		return time.Time{}, false, err
 	}
 	return ts, true, nil
+}
+
+// Fingerprint returns a SHA-256 hex digest and the total vulnerability count
+// that together uniquely identify the DB state. The digest changes whenever
+// vulns are added/updated or an ingest run is recorded.
+func (s *DB) Fingerprint(ctx context.Context) (digest string, total int64, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT v.ecosystem, COUNT(DISTINCT v.id), COALESCE(MAX(l.last_run_at::TEXT), '')
+		FROM vulnerabilities v
+		LEFT JOIN ingest_log l ON l.source LIKE '%' || v.ecosystem || '%'
+		GROUP BY v.ecosystem
+		ORDER BY v.ecosystem
+	`)
+	if err != nil {
+		return "", 0, fmt.Errorf("fingerprint query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var lines []string
+	for rows.Next() {
+		var eco, lastIngest string
+		var count int64
+		if err := rows.Scan(&eco, &count, &lastIngest); err != nil {
+			return "", 0, err
+		}
+		total += count
+		lines = append(lines, fmt.Sprintf("%s:%d:%s", eco, count, lastIngest))
+	}
+	if err := rows.Err(); err != nil {
+		return "", 0, err
+	}
+	sort.Strings(lines)
+	h := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return fmt.Sprintf("sha256:%x", h), total, nil
 }
 
 // TouchIngestLog records a successful ingest run for the given source name.
