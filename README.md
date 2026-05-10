@@ -95,7 +95,11 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 | **Multi-project** | `--multi ./services/...` scans every sub-project in a monorepo in a single run |
 | **Plugin system** | `pkg/plugin.EcosystemPlugin` interface — add new ecosystems without forking argus |
 | **Performance** | Parallel scan workers, parallel embed workers, exponential-backoff retry |
+| **Profiles** | Named scan profiles (`default`, `fast`, `ci`, `thorough`) — bundle flags into a single `--profile` name; define custom profiles in `.argus.yaml` |
+| **Attestation** | `--attest` produces a tamper-evident Ed25519-signed JSON record; `argus verify` validates it anywhere |
+| **Web UI** | `argus serve` launches a local dashboard with live scan history and DB ecosystem stats |
 | **CI** | `--fail-on` threshold flag, SARIF upload, official GitHub Actions composite action |
+| **CI templates** | Ready-to-use pipeline files for GitLab CI, Azure DevOps, Jenkins, CircleCI, CodeBuild, Cloud Build |
 | **Docker** | Slim image (`ghcr.io/abhishekamralkar/argus`) + bundled image with Ollama included |
 | **Config** | `.argus.yaml` project config file — commit once, no repeated flags in CI |
 
@@ -308,6 +312,10 @@ argus scan . --output spdx > sbom.spdx.json
 | `--embed-base-url` | _(Ollama)_ | Embedding API base URL |
 | `--similarity-threshold` | `0.5` | Cosine similarity cutoff (raise to reduce false positives) |
 | `--timeout` | `30` | Scan timeout in minutes (0 = no timeout) |
+| `--fixes-only` | off | Only report packages that have at least one finding with a known fix version |
+| `--profile` | _(none)_ | Named scan profile from `.argus.yaml` or built-in: `default`, `fast`, `ci`, `thorough` |
+| `--attest` | off | Build and sign a tamper-evident attestation after the scan |
+| `--attestation-out` | `argus-attestation.json` | Path to write the attestation JSON |
 | `--db` | `./vulns.db` | DuckDB database path |
 
 ---
@@ -380,6 +388,108 @@ argus baseline reset --confirm .
 | `update` | Run a `diff` scan, then save the new results as the updated baseline |
 
 Baseline state is stored in the DuckDB database (a separate `scan_baseline` table), keyed by the absolute project directory path.
+
+---
+
+### Fixes-only mode
+
+When you only want to see actionable findings — packages where an upgrade is available:
+
+```bash
+argus scan . --fixes-only
+argus scan . --fixes-only --output sarif > fixable.sarif
+```
+
+---
+
+### Named scan profiles
+
+Profiles bundle multiple flags into a single name. Four built-ins ship with argus:
+
+| Profile | Workers | Top-K | Similarity | Min-severity | Output |
+|---|---|---|---|---|---|
+| `default` | 4 | 10 | 0.35 | _(all)_ | text |
+| `fast` | 8 | 5 | 0.65 | HIGH | text |
+| `ci` | 4 | 10 | 0.55 | _(all)_ | sarif |
+| `thorough` | 2 | 20 | 0.40 | LOW | text |
+
+```bash
+# Use a built-in profile
+argus scan . --profile ci
+
+# List all available profiles (built-ins + project custom)
+argus config profiles list
+```
+
+Define custom profiles in `.argus.yaml`:
+
+```yaml
+# .argus.yaml
+default_profile: strict
+
+profiles:
+  strict:
+    workers: 4
+    top_k: 15
+    min_similarity: 0.45
+    min_severity: MEDIUM
+    fail_on: HIGH
+    output: sarif
+```
+
+CLI flags always override the active profile.
+
+---
+
+### `verify` — verify a scan attestation
+
+`argus verify` checks the Ed25519 signature on an attestation file and prints its metadata.
+
+```bash
+# Verify using the local signing key (default: ~/.argus/keys/signing.pub)
+argus verify argus-attestation.json
+
+# Verify with an explicit public key (e.g. distributed in a release artifact)
+argus verify argus-attestation.json --key /path/to/signing.pub
+```
+
+Sample output:
+
+```
+OK  signature valid
+    scanned:   /home/user/myapp
+    scan time: 2026-05-10T21:00:00Z
+    findings:  3
+    db digest: sha256:a1b2c3d4...
+    key hint:  4f3a9e2b1c7d5e8f
+```
+
+Keys are auto-generated in `~/.argus/keys/` on first use. Share `signing.pub` with downstream consumers so they can verify without access to the private key.
+
+---
+
+### `serve` — web UI dashboard
+
+`argus serve` starts a local HTTP server with a live dashboard showing scan history and database ecosystem statistics.
+
+```bash
+# Default: http://127.0.0.1:8080
+argus serve
+
+# Custom port and host
+argus serve --port 9090 --host 0.0.0.0
+
+# Read-only mode (disables any future write endpoints)
+argus serve --read-only
+
+# Point at a specific database
+argus serve --db /var/lib/argus/vulns.db --port 8080
+```
+
+The dashboard shows:
+- Per-ecosystem vulnerability and chunk counts
+- Recent scan history (project, timestamp, finding counts by severity)
+- Live DB health status
 
 ---
 
@@ -596,6 +706,30 @@ embed_model: nomic-embed-text
 # OpenAI-compatible endpoint (optional)
 # llm_base_url: http://localhost:4000/v1
 # embed_base_url: http://localhost:4000/v1
+
+# Named profiles — switch with: argus scan . --profile <name>
+default_profile: default    # active when no --profile flag is given
+
+profiles:
+  default:
+    workers: 4
+    top_k: 10
+    min_similarity: 0.35
+    fail_on: HIGH
+    output: text
+  ci:
+    workers: 4
+    top_k: 10
+    min_similarity: 0.55
+    fail_on: HIGH
+    output: sarif
+  thorough:
+    workers: 2
+    top_k: 20
+    min_similarity: 0.40
+    min_severity: LOW
+    fail_on: HIGH
+    output: text
 ```
 
 ---
@@ -695,6 +829,36 @@ See [`action.yml`](action.yml) and [`.github/workflows/argus-example.yml`](.gith
   run: argus scan . --baseline-mode update --fail-on HIGH
 ```
 
+### Scan attestation in CI
+
+```yaml
+- name: Scan with attestation
+  run: |
+    argus scan . --output sarif --attest --attestation-out argus-attestation.json \
+      > argus.sarif
+
+- name: Upload attestation
+  uses: actions/upload-artifact@v4
+  with:
+    name: scan-attestation
+    path: argus-attestation.json
+```
+
+### Other CI/CD platforms
+
+Ready-to-use pipeline templates live in [`ci-templates/`](ci-templates/):
+
+| File | Platform |
+|---|---|
+| [`gitlab-ci.yml`](ci-templates/gitlab-ci.yml) | GitLab CI/CD |
+| [`azure-pipelines.yml`](ci-templates/azure-pipelines.yml) | Azure DevOps |
+| [`Jenkinsfile`](ci-templates/Jenkinsfile) | Jenkins (declarative pipeline) |
+| [`circleci-config.yml`](ci-templates/circleci-config.yml) | CircleCI |
+| [`buildspec.yml`](ci-templates/buildspec.yml) | AWS CodeBuild |
+| [`cloudbuild.yaml`](ci-templates/cloudbuild.yaml) | Google Cloud Build |
+
+Each template covers install, DB cache, ingest, scan, and SARIF/artifact upload steps. See [`ci-templates/README.md`](ci-templates/README.md) for per-platform setup instructions.
+
 ---
 
 ## Environment variables
@@ -740,11 +904,15 @@ cmd/argus/
   main.go                       CLI entry point (cobra) — all commands
   scan_multi.go                 Multi-project scan logic and aggregated reporting
 internal/
+  attest/
+    attest.go                   Attestation struct, Build(), UnsignedPayload(), FindingsHashOf()
+    keys.go                     Ed25519 key generation/loading (PKCS8/PKIX PEM, ~/.argus/keys)
+    sign.go                     Sign() and Verify() — Ed25519 signature over attestation payload
   baseline/diff.go              Baseline diff — compare scan results against stored snapshot
   cache/cache.go                Local feed cache (ETag/Last-Modified, XDG_CACHE_HOME)
   color/color.go                Color-coded severity/verdict output
-  config/config.go              .argus.yaml loader + validation
-  doctor/doctor.go              Self-diagnostic checks (DB, embed, LLM, config)
+  config/config.go              .argus.yaml loader + validation; Profile struct + built-in profiles
+  doctor/doctor.go              Self-diagnostic checks (DB, embed, LLM, config, signing keys)
   embed/client.go               Embedding client (Ollama + OpenAI-compatible)
   ignore/ignore.go              .argusignore loader
   ingest/
@@ -768,14 +936,25 @@ internal/
     gemfile.go                  Ruby Gemfile.lock parser
   rag/query.go                  RAG pipeline — embed, retrieve, filter, sort by CVSS, prompt, generate
   store/
-    duckdb.go                   DuckDB vector store — schema, upsert, search, status
+    duckdb.go                   DuckDB vector store — schema, upsert, search, scan_runs table
     baseline.go                 Scan baseline persistence (scan_baseline table)
-    types.go                    Shared Vulnerability type (with CVSSScore, CVSSVector)
+    types.go                    Shared types: Vulnerability, ScanRun (with severity counts)
   version/compare.go            Semver comparison for version-aware CVE filtering
+  web/
+    web.go                      HTTP server — routes for dashboard UI and /api/v1 JSON endpoints
+    assets/index.html           Single-file dark-theme dashboard (vanilla JS, no external deps)
 pkg/plugin/
   plugin.go                     EcosystemPlugin interface + Registry + external plugin loader
   builtins.go                   Built-in parser registrations (wraps internal/parser)
 examples/plugins/php/plugin.go  Example external plugin (composer.lock; //go:build ignore)
+ci-templates/
+  gitlab-ci.yml                 GitLab CI/CD pipeline
+  azure-pipelines.yml           Azure DevOps pipeline
+  Jenkinsfile                   Jenkins declarative pipeline
+  circleci-config.yml           CircleCI config
+  buildspec.yml                 AWS CodeBuild buildspec
+  cloudbuild.yaml               Google Cloud Build config
+  README.md                     Per-platform setup guide
 action.yml                      Official GitHub Actions composite action
 Dockerfile                      Slim image (requires external Ollama)
 Dockerfile.bundled              Bundled image (Ollama + argus in one container)
