@@ -29,7 +29,7 @@ jobs:
 
       - name: Extract metadata (slim image)
         id: meta-slim
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -39,7 +39,7 @@ jobs:
 
       - name: Extract metadata (bundled image)
         id: meta-bundled
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
