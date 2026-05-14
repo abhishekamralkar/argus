@@ -75,7 +75,7 @@ func TestGenerate_AllRetriesExhausted(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	err := newTestClient(srv).Generate(context.Background(),"failing prompt", &sb)
+	err := newTestClient(srv).Generate(context.Background(), "failing prompt", &sb)
 	if err == nil {
 		t.Fatal("expected error after all retries, got nil")
 	}
@@ -88,7 +88,7 @@ func TestGenerate_NonRetriableHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	err := newTestClient(srv).Generate(context.Background(),"bad request", &sb)
+	err := newTestClient(srv).Generate(context.Background(), "bad request", &sb)
 	if err == nil {
 		t.Fatal("expected error for HTTP 400, got nil")
 	}
@@ -123,7 +123,7 @@ func TestGenerate_EmptyStream(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate(context.Background(),"empty", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(), "empty", &sb); err != nil {
 		t.Fatalf("unexpected error for empty stream: %v", err)
 	}
 	if sb.String() != "" {

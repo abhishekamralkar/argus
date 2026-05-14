@@ -59,7 +59,7 @@ func TestEmbed_HTTP500RetrySucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestClient(srv).Embed(context.Background(),"retry test")
+	got, err := newTestClient(srv).Embed(context.Background(), "retry test")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestEmbed_AllRetriesExhausted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed(context.Background(),"failing query")
+	_, err := newTestClient(srv).Embed(context.Background(), "failing query")
 	if err == nil {
 		t.Fatal("expected error after all retries, got nil")
 	}
@@ -92,7 +92,7 @@ func TestEmbed_EmptyEmbedding(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed(context.Background(),"empty response")
+	_, err := newTestClient(srv).Embed(context.Background(), "empty response")
 	if err == nil {
 		t.Fatal("expected error for empty embedding, got nil")
 	}
@@ -104,7 +104,7 @@ func TestEmbed_MalformedJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed(context.Background(),"bad json")
+	_, err := newTestClient(srv).Embed(context.Background(), "bad json")
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}
