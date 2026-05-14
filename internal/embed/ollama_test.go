@@ -122,7 +122,7 @@ func TestEmbed_TextTruncation(t *testing.T) {
 	defer srv.Close()
 
 	longText := strings.Repeat("a", 10000)
-	_, err := newTestClient(srv).Embed(context.Background(),longText)
+	_, err := newTestClient(srv).Embed(context.Background(), longText)
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
