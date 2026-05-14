@@ -94,12 +94,12 @@ func (r Result) Verdict() string {
 }
 
 // enhanceQueryText uses the LLM to expand a short query for better recall.
-func (e *Engine) enhanceQueryText(query string) string {
+func (e *Engine) enhanceQueryText(ctx context.Context, query string) string {
 	prompt := fmt.Sprintf(
 		"Expand the following software vulnerability search query with related keywords, CVE patterns, and attack vectors. "+
 			"Return only the expanded query as a single line, no explanation.\n\nQuery: %s", query)
 	var sb strings.Builder
-	if err := e.generator.Generate(prompt, &sb); err != nil {
+	if err := e.generator.Generate(ctx, prompt, &sb); err != nil {
 		return query
 	}
 	expanded := strings.TrimSpace(sb.String())
@@ -116,9 +116,9 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 
 	query := fmt.Sprintf("%s package %s version %s vulnerability security", dep.Ecosystem, dep.Name, dep.Version)
 	if e.cfg.EnhanceQuery {
-		query = e.enhanceQueryText(query)
+		query = e.enhanceQueryText(ctx, query)
 	}
-	vec, err := e.embedder.Embed(query)
+	vec, err := e.embedder.Embed(ctx, query)
 	if err != nil {
 		result.Err = fmt.Errorf("embed query: %w", err)
 		return result, nil
@@ -218,7 +218,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 
 	var llmBuf strings.Builder
 	bw := bufio.NewWriter(io.MultiWriter(out, &llmBuf))
-	err = e.generator.Generate(buildPrompt(dep, relevant), writerFunc(func(p []byte) (int, error) {
+	err = e.generator.Generate(ctx, buildPrompt(dep, relevant), writerFunc(func(p []byte) (int, error) {
 		n, err := bw.Write(p)
 		_ = bw.Flush()
 		return n, err

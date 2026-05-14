@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/abhishekamralkar/argus/internal/store"
@@ -39,7 +40,15 @@ type ecosystemResponse struct {
 // Serve opens the database and starts the HTTP server. It blocks until the
 // server is stopped.
 func Serve(cfg Config) error {
-	db, err := store.Open(cfg.DBPath)
+	var (
+		db  *store.DB
+		err error
+	)
+	if cfg.ReadOnly {
+		db, err = store.OpenReadOnly(cfg.DBPath)
+	} else {
+		db, err = store.Open(cfg.DBPath)
+	}
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
@@ -111,7 +120,43 @@ func Serve(cfg Config) error {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	slog.Info("argus dashboard running", "url", fmt.Sprintf("http://%s", addr), "db", cfg.DBPath)
-	return http.ListenAndServe(addr, mux) //nolint:gosec // user-controlled address is intentional
+	return http.ListenAndServe(addr, withMiddleware(mux)) //nolint:gosec // user-controlled address is intentional
+}
+
+// withMiddleware wraps a handler with panic recovery and request logging.
+func withMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Panic recovery — prevent a handler bug from crashing the server.
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("dashboard: handler panic", "recover", rec, "stack", string(debug.Stack()))
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+
+		rw := &responseWriter{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(rw, r)
+
+		slog.Info("dashboard",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.code,
+			"duration", time.Since(start),
+		)
+	})
+}
+
+// responseWriter captures the status code written by a handler.
+type responseWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.code = code
+	rw.ResponseWriter.WriteHeader(code)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

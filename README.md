@@ -1,4 +1,6 @@
-# argus
+<p align="center">
+  <img src="assets/argus-banner.svg" alt="Argus — RAG-powered vulnerability scanner" width="900"/>
+</p>
 
 A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, **Python**, **Rust**, **npm/Node.js**, **Maven/Java**, **NuGet/.NET**, and **Ruby** projects — powered by local [Ollama](https://ollama.com) models **or** any OpenAI-compatible API. No cloud lock-in. Your code stays on your machine.
 

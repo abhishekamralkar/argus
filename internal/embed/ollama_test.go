@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func TestEmbed_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestClient(srv).Embed("test query")
+	got, err := newTestClient(srv).Embed(context.Background(),"test query")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestEmbed_HTTP500RetrySucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestClient(srv).Embed("retry test")
+	got, err := newTestClient(srv).Embed(context.Background(),"retry test")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestEmbed_AllRetriesExhausted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed("failing query")
+	_, err := newTestClient(srv).Embed(context.Background(),"failing query")
 	if err == nil {
 		t.Fatal("expected error after all retries, got nil")
 	}
@@ -91,7 +92,7 @@ func TestEmbed_EmptyEmbedding(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed("empty response")
+	_, err := newTestClient(srv).Embed(context.Background(),"empty response")
 	if err == nil {
 		t.Fatal("expected error for empty embedding, got nil")
 	}
@@ -103,7 +104,7 @@ func TestEmbed_MalformedJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).Embed("bad json")
+	_, err := newTestClient(srv).Embed(context.Background(),"bad json")
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
 	}
@@ -121,7 +122,7 @@ func TestEmbed_TextTruncation(t *testing.T) {
 	defer srv.Close()
 
 	longText := strings.Repeat("a", 10000)
-	_, err := newTestClient(srv).Embed(longText)
+	_, err := newTestClient(srv).Embed(context.Background(),longText)
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestEmbed_OpenAIFormat(t *testing.T) {
 	c := NewClientWithConfig(Config{Model: "text-embedding-3-small", BaseURL: srv.URL, APIKey: "test-key"})
 	c.client = srv.Client()
 
-	got, err := c.Embed("test input")
+	got, err := c.Embed(context.Background(), "test input")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}

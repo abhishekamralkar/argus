@@ -492,7 +492,7 @@ func ingestSourceWhole(
 	for range numWorkers {
 		wg.Go(func() {
 			for v := range workCh {
-				vec, err := embedder.Embed(v.Summary + "\n" + v.Details)
+				vec, err := embedder.Embed(ctx, v.Summary+"\n"+v.Details)
 				if err != nil {
 					slog.Warn("embed failed, skipping vulnerability", "vuln_id", v.ID, "source", name, "error", err)
 					errCount.Add(1)
@@ -570,7 +570,7 @@ func ingestSourceChunked(
 	for range numWorkers {
 		wg.Go(func() {
 			for w := range workCh {
-				vec, err := embedder.Embed(w.text)
+				vec, err := embedder.Embed(ctx, w.text)
 				if err != nil {
 					slog.Warn("embed failed, dropping chunk", "vuln_id", w.vuln.ID, "chunk_id", w.chunkID, "source", name, "error", err)
 					errCount.Add(1)
@@ -1276,7 +1276,7 @@ func searchCmd(dbPath *string) *cobra.Command {
 			defer func() { _ = db.Close() }()
 
 			embedder := embed.NewClient(embedModel)
-			vec, err := embedder.Embed(query)
+			vec, err := embedder.Embed(ctx, query)
 			if err != nil {
 				return fmt.Errorf("embed query: %w", err)
 			}

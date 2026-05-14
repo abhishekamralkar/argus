@@ -4,16 +4,45 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	defaultModel       = "nomic-embed-text"
 	defaultOpenAIModel = "text-embedding-3-small"
+
+	maxTextBytes = 8000
 )
+
+// sharedTransport is reused across all Client instances to share the underlying
+// connection pool and avoid per-worker TCP connection churn.
+var sharedTransport = &http.Transport{
+	MaxIdleConnsPerHost: 8,
+	IdleConnTimeout:     90 * time.Second,
+}
+
+// permanentError wraps a non-retryable error (e.g. HTTP 401, 400, 404).
+type permanentError struct{ error }
+
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// safeTruncate trims s to at most maxBytes without splitting a UTF-8 codepoint.
+func safeTruncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
 
 // Client calls an embedding model. It supports two wire formats:
 //   - Ollama: POST /api/embeddings with {"model","prompt"}
@@ -68,7 +97,7 @@ func NewClientWithConfig(cfg Config) *Client {
 			model:      model,
 			apiKey:     apiKey,
 			openaiMode: true,
-			client:     &http.Client{Timeout: 60 * time.Second},
+			client:     &http.Client{Transport: sharedTransport, Timeout: 60 * time.Second},
 		}
 	}
 
@@ -82,14 +111,15 @@ func NewClientWithConfig(cfg Config) *Client {
 	return &Client{
 		baseURL: host,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Transport: sharedTransport, Timeout: 60 * time.Second},
 	}
 }
 
-func (c *Client) Embed(text string) ([]float32, error) {
-	if len(text) > 8000 {
-		text = text[:8000]
-	}
+// Embed returns the embedding vector for text. It retries on transient errors
+// (network failures, 429, 5xx) but returns immediately on permanent errors
+// (401, 400, 404, etc.).
+func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	text = safeTruncate(text, maxTextBytes)
 
 	var lastErr error
 	for attempt := range 3 {
@@ -101,12 +131,15 @@ func (c *Client) Embed(text string) ([]float32, error) {
 			err error
 		)
 		if c.openaiMode {
-			vec, err = c.doEmbedOpenAI(text)
+			vec, err = c.doEmbedOpenAI(ctx, text)
 		} else {
-			vec, err = c.doEmbedOllama(text)
+			vec, err = c.doEmbedOllama(ctx, text)
 		}
 		if err == nil {
 			return vec, nil
+		}
+		if errors.As(err, new(*permanentError)) {
+			return nil, err
 		}
 		lastErr = err
 	}
@@ -124,13 +157,13 @@ type ollamaEmbedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func (c *Client) doEmbedOllama(text string) ([]float32, error) {
+func (c *Client) doEmbedOllama(ctx context.Context, text string) ([]float32, error) {
 	body, err := json.Marshal(ollamaEmbedRequest{Model: c.model, Prompt: text})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/api/embeddings", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +175,9 @@ func (c *Client) doEmbedOllama(text string) ([]float32, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, &permanentError{fmt.Errorf("ollama embed: HTTP %d", resp.StatusCode)}
+		}
 		return nil, fmt.Errorf("ollama embed: HTTP %d", resp.StatusCode)
 	}
 
@@ -168,13 +204,13 @@ type openAIEmbedResponse struct {
 	} `json:"data"`
 }
 
-func (c *Client) doEmbedOpenAI(text string) ([]float32, error) {
+func (c *Client) doEmbedOpenAI(ctx context.Context, text string) ([]float32, error) {
 	body, err := json.Marshal(openAIEmbedRequest{Model: c.model, Input: text})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/embeddings", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +225,9 @@ func (c *Client) doEmbedOpenAI(text string) ([]float32, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, &permanentError{fmt.Errorf("embed: HTTP %d", resp.StatusCode)}
+		}
 		return nil, fmt.Errorf("embed: HTTP %d", resp.StatusCode)
 	}
 

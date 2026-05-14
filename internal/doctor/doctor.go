@@ -107,8 +107,10 @@ func Run(ctx context.Context, cfg Config) []Check {
 		endpointCheck := checkOllamaEndpoint(ctx, llmURL)
 		checks = append(checks, endpointCheck)
 		if endpointCheck.OK {
-			checks = append(checks, checkOllamaModel(ctx, llmURL, llmModel, "LLM"))
-			checks = append(checks, checkOllamaModel(ctx, embedURL, embedModel, "embedding"))
+			// Fetch the model list once and check both models against it.
+			available, tagsErr := fetchOllamaModels(ctx, llmURL)
+			checks = append(checks, checkOllamaModelAvailable(llmModel, "LLM", available, tagsErr))
+			checks = append(checks, checkOllamaModelAvailable(embedModel, "embedding", available, tagsErr))
 		} else {
 			checks = append(checks,
 				Check{Name: "LLM model (" + llmModel + ")", OK: false, Detail: "skipped — Ollama endpoint unreachable"},
@@ -244,37 +246,52 @@ func checkOllamaEndpoint(ctx context.Context, baseURL string) Check {
 	return Check{Name: name, OK: true, Detail: baseURL}
 }
 
+// checkOllamaModel is a convenience wrapper used in tests.
 func checkOllamaModel(ctx context.Context, baseURL, model, kind string) Check {
-	name := fmt.Sprintf("%s model (%s)", kind, model)
+	available, err := fetchOllamaModels(ctx, baseURL)
+	return checkOllamaModelAvailable(model, kind, available, err)
+}
+
+// fetchOllamaModels fetches the installed model names from /api/tags once.
+func fetchOllamaModels(ctx context.Context, baseURL string) ([]string, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/api/tags", http.NoBody)
 	if err != nil {
-		return Check{Name: name, OK: false, Detail: err.Error()}
+		return nil, err
 	}
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return Check{Name: name, OK: false, Detail: fmt.Sprintf("cannot reach Ollama: %v", err)}
+		return nil, fmt.Errorf("cannot reach Ollama: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return Check{Name: name, OK: false, Detail: fmt.Sprintf("Ollama returned HTTP %d", resp.StatusCode)}
+		return nil, fmt.Errorf("Ollama returned HTTP %d", resp.StatusCode)
 	}
-
 	var tags ollamaTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return Check{Name: name, OK: false, Detail: fmt.Sprintf("failed to parse model list: %v", err)}
+		return nil, fmt.Errorf("failed to parse model list: %w", err)
 	}
-
+	names := make([]string, 0, len(tags.Models))
 	for _, m := range tags.Models {
-		if m.Name == model || strings.TrimSuffix(m.Name, ":latest") == model {
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
+// checkOllamaModelAvailable checks whether model appears in the pre-fetched list.
+func checkOllamaModelAvailable(model, kind string, available []string, fetchErr error) Check {
+	name := fmt.Sprintf("%s model (%s)", kind, model)
+	if fetchErr != nil {
+		return Check{Name: name, OK: false, Detail: fmt.Sprintf("model list unavailable: %v", fetchErr)}
+	}
+	for _, m := range available {
+		if m == model || strings.TrimSuffix(m, ":latest") == model {
 			return Check{Name: name, OK: true, Detail: "available"}
 		}
 	}
-
 	return Check{
 		Name:   name,
 		OK:     false,

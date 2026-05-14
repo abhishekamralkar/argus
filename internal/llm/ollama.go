@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,20 @@ const (
 	defaultModel       = "llama3.1:8b"
 	defaultOpenAIModel = "gpt-4o-mini"
 )
+
+// sharedTransport is reused across all Client instances to share the underlying
+// connection pool and avoid per-worker TCP connection churn.
+var sharedTransport = &http.Transport{
+	MaxIdleConnsPerHost: 8,
+	IdleConnTimeout:     90 * time.Second,
+}
+
+// permanentError wraps a non-retryable error (e.g. HTTP 401, 400, 404).
+type permanentError struct{ error }
+
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
 
 // Client calls an LLM for text generation. It supports two wire formats:
 //   - Ollama: POST /api/generate with NDJSON streaming
@@ -76,7 +91,7 @@ func NewClientWithConfig(cfg Config) *Client {
 			model:      model,
 			apiKey:     apiKey,
 			openaiMode: true,
-			client:     &http.Client{Timeout: 300 * time.Second},
+			client:     &http.Client{Transport: sharedTransport, Timeout: 300 * time.Second},
 		}
 	}
 
@@ -91,13 +106,14 @@ func NewClientWithConfig(cfg Config) *Client {
 	return &Client{
 		baseURL: host,
 		model:   model,
-		client:  &http.Client{Timeout: 300 * time.Second},
+		client:  &http.Client{Transport: sharedTransport, Timeout: 300 * time.Second},
 	}
 }
 
 // Generate streams the LLM response, writing tokens to out as they arrive.
-// Retries up to 3 times on HTTP 500 with exponential backoff.
-func (c *Client) Generate(prompt string, out io.Writer) error {
+// It retries on transient errors (network failures, 429, 5xx) but returns
+// immediately on permanent errors (401, 400, 404, etc.).
+func (c *Client) Generate(ctx context.Context, prompt string, out io.Writer) error {
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
@@ -105,12 +121,15 @@ func (c *Client) Generate(prompt string, out io.Writer) error {
 		}
 		var err error
 		if c.openaiMode {
-			err = c.doGenerateOpenAI(prompt, out)
+			err = c.doGenerateOpenAI(ctx, prompt, out)
 		} else {
-			err = c.doGenerateOllama(prompt, out)
+			err = c.doGenerateOllama(ctx, prompt, out)
 		}
 		if err == nil {
 			return nil
+		}
+		if errors.As(err, new(*permanentError)) {
+			return err
 		}
 		lastErr = err
 	}
@@ -130,7 +149,7 @@ type ollamaGenerateChunk struct {
 	Done     bool   `json:"done"`
 }
 
-func (c *Client) doGenerateOllama(prompt string, out io.Writer) error {
+func (c *Client) doGenerateOllama(ctx context.Context, prompt string, out io.Writer) error {
 	body, err := json.Marshal(ollamaGenerateRequest{
 		Model:  c.model,
 		Prompt: prompt,
@@ -140,7 +159,7 @@ func (c *Client) doGenerateOllama(prompt string, out io.Writer) error {
 		return fmt.Errorf("marshal generate request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -151,10 +170,10 @@ func (c *Client) doGenerateOllama(prompt string, out io.Writer) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusInternalServerError {
-		return fmt.Errorf("ollama generate: HTTP 500 (model loading?)")
-	}
 	if resp.StatusCode != http.StatusOK {
+		if !isRetryableStatus(resp.StatusCode) {
+			return &permanentError{fmt.Errorf("ollama generate: HTTP %d", resp.StatusCode)}
+		}
 		return fmt.Errorf("ollama generate: HTTP %d", resp.StatusCode)
 	}
 
@@ -196,7 +215,7 @@ type openAIStreamChunk struct {
 	} `json:"choices"`
 }
 
-func (c *Client) doGenerateOpenAI(prompt string, out io.Writer) error {
+func (c *Client) doGenerateOpenAI(ctx context.Context, prompt string, out io.Writer) error {
 	body, err := json.Marshal(openAIChatRequest{
 		Model:    c.model,
 		Messages: []openAIMessage{{Role: "user", Content: prompt}},
@@ -206,7 +225,7 @@ func (c *Client) doGenerateOpenAI(prompt string, out io.Writer) error {
 		return fmt.Errorf("marshal chat request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -220,12 +239,12 @@ func (c *Client) doGenerateOpenAI(prompt string, out io.Writer) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusInternalServerError {
-		return fmt.Errorf("llm generate: HTTP 500")
-	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("llm generate: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+		if !isRetryableStatus(resp.StatusCode) {
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return &permanentError{fmt.Errorf("llm generate: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(errBody))}
+		}
+		return fmt.Errorf("llm generate: HTTP %d", resp.StatusCode)
 	}
 
 	// SSE: each line is "data: <json>" or "data: [DONE]"

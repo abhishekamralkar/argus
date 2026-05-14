@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +36,7 @@ func TestGenerate_Success(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate("prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if sb.String() != "hello world" {
@@ -56,7 +57,7 @@ func TestGenerate_HTTP500RetrySucceeds(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate("prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if calls != 2 {
@@ -74,7 +75,7 @@ func TestGenerate_AllRetriesExhausted(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	err := newTestClient(srv).Generate("failing prompt", &sb)
+	err := newTestClient(srv).Generate(context.Background(),"failing prompt", &sb)
 	if err == nil {
 		t.Fatal("expected error after all retries, got nil")
 	}
@@ -87,7 +88,7 @@ func TestGenerate_NonRetriableHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	err := newTestClient(srv).Generate("bad request", &sb)
+	err := newTestClient(srv).Generate(context.Background(),"bad request", &sb)
 	if err == nil {
 		t.Fatal("expected error for HTTP 400, got nil")
 	}
@@ -107,7 +108,7 @@ func TestGenerate_MalformedChunksSkipped(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate("prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if sb.String() != "good" {
@@ -122,7 +123,7 @@ func TestGenerate_EmptyStream(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate("empty", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(),"empty", &sb); err != nil {
 		t.Fatalf("unexpected error for empty stream: %v", err)
 	}
 	if sb.String() != "" {
@@ -153,7 +154,7 @@ func TestGenerate_OpenAIFormat(t *testing.T) {
 	c.client = srv.Client()
 
 	var sb strings.Builder
-	if err := c.Generate("prompt", &sb); err != nil {
+	if err := c.Generate(context.Background(), "prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if sb.String() != "hello world" {

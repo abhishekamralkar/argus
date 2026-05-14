@@ -1,0 +1,231 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 180" width="900" height="180" role="img" aria-label="Argus — RAG-powered vulnerability scanner">
+  <defs>
+    <!-- Background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+
+    <!-- Shield fill -->
+    <linearGradient id="shieldFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1c2333"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+
+    <!-- Title text -->
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f0f6fc"/>
+      <stop offset="100%" stop-color="#c9d1d9"/>
+    </linearGradient>
+
+    <!-- Eye iris -->
+    <radialGradient id="iris" cx="45%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#f87171"/>
+      <stop offset="100%" stop-color="#b91c1c"/>
+    </radialGradient>
+
+    <!-- Eye ambient glow -->
+    <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Soft red glow filter for the eye -->
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Very subtle glow for tiny eyes -->
+    <filter id="tinyGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ─── Background ─────────────────────────────────────────── -->
+  <rect width="900" height="180" rx="14" fill="url(#bg)"/>
+  <!-- outer border -->
+  <rect width="900" height="180" rx="14" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- left red accent strip -->
+  <rect x="0" y="0" width="5" height="180" rx="3" fill="#ef4444"/>
+
+  <!-- ─── Subtle dot-grid background texture ─────────────────── -->
+  <g opacity="0.06" fill="#8b949e">
+    <circle cx="40"  cy="30"  r="1"/><circle cx="80"  cy="30"  r="1"/>
+    <circle cx="40"  cy="60"  r="1"/><circle cx="80"  cy="60"  r="1"/>
+    <circle cx="40"  cy="90"  r="1"/><circle cx="80"  cy="90"  r="1"/>
+    <circle cx="40"  cy="120" r="1"/><circle cx="80"  cy="120" r="1"/>
+    <circle cx="40"  cy="150" r="1"/><circle cx="80"  cy="150" r="1"/>
+  </g>
+
+  <!-- ─── Shield ─────────────────────────────────────────────── -->
+  <!-- outer shell -->
+  <path d="M 55 22 L 145 22 L 145 118 Q 145 162 100 178 Q 55 162 55 118 Z"
+        fill="url(#shieldFill)" stroke="#30363d" stroke-width="1.5"/>
+  <!-- inner red ring (faint) -->
+  <path d="M 61 29 L 139 29 L 139 116 Q 139 157 100 172 Q 61 157 61 116 Z"
+        fill="none" stroke="#ef4444" stroke-width="1" opacity="0.35"/>
+
+  <!-- ambient glow halo around eye -->
+  <ellipse cx="100" cy="99" rx="38" ry="38" fill="url(#eyeGlow)"/>
+
+  <!-- ── Main eye ── -->
+  <!-- sclera -->
+  <ellipse cx="100" cy="99" rx="30" ry="19" fill="#0d1117" stroke="#ef4444" stroke-width="1.5" filter="url(#glow)"/>
+  <!-- iris -->
+  <circle  cx="100" cy="99" r="13"  fill="url(#iris)"/>
+  <!-- pupil -->
+  <circle  cx="100" cy="99" r="6.5" fill="#080d13"/>
+  <!-- specular highlights -->
+  <circle  cx="105" cy="94" r="3"   fill="white" opacity="0.75"/>
+  <circle  cx="97"  cy="104" r="1.2" fill="white" opacity="0.35"/>
+  <!-- scan-line across eye -->
+  <line x1="70" y1="99" x2="130" y2="99" stroke="#ef4444" stroke-width="0.6"
+        stroke-dasharray="4,4" opacity="0.3"/>
+
+  <!-- ── Mini eyes scattered around the shield (Argus mythology) ── -->
+  <!-- top row -->
+  <g filter="url(#tinyGlow)">
+    <ellipse cx="73"  cy="42" rx="5"   ry="3.2" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.5"/>
+    <circle  cx="73"  cy="42" r="1.6"  fill="#ef4444" opacity="0.6"/>
+    <ellipse cx="127" cy="42" rx="5"   ry="3.2" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.5"/>
+    <circle  cx="127" cy="42" r="1.6"  fill="#ef4444" opacity="0.6"/>
+    <!-- side left -->
+    <ellipse cx="59"  cy="72" rx="4.5" ry="2.8" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.4"/>
+    <circle  cx="59"  cy="72" r="1.4"  fill="#ef4444" opacity="0.5"/>
+    <!-- side right -->
+    <ellipse cx="141" cy="72" rx="4.5" ry="2.8" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.4"/>
+    <circle  cx="141" cy="72" r="1.4"  fill="#ef4444" opacity="0.5"/>
+    <!-- side left lower -->
+    <ellipse cx="59"  cy="126" rx="4"  ry="2.5" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.3"/>
+    <circle  cx="59"  cy="126" r="1.2" fill="#ef4444" opacity="0.4"/>
+    <!-- side right lower -->
+    <ellipse cx="141" cy="126" rx="4"  ry="2.5" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.3"/>
+    <circle  cx="141" cy="126" r="1.2" fill="#ef4444" opacity="0.4"/>
+    <!-- bottom cluster -->
+    <ellipse cx="77"  cy="152" rx="3.5" ry="2.2" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.25"/>
+    <circle  cx="77"  cy="152" r="1"    fill="#ef4444" opacity="0.35"/>
+    <ellipse cx="123" cy="152" rx="3.5" ry="2.2" fill="#0d1117" stroke="#ef4444" stroke-width="0.8" opacity="0.25"/>
+    <circle  cx="123" cy="152" r="1"    fill="#ef4444" opacity="0.35"/>
+  </g>
+
+  <!-- ─── Title ───────────────────────────────────────────────── -->
+  <text x="173" y="95"
+        font-family="'Segoe UI', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+        font-size="66" font-weight="800" fill="url(#titleGrad)"
+        letter-spacing="-1">ARGUS</text>
+
+  <!-- red rule under title -->
+  <rect x="173" y="104" width="395" height="2.5" rx="1.5" fill="#ef4444" opacity="0.55"/>
+
+  <!-- ─── Tagline ─────────────────────────────────────────────── -->
+  <text x="175" y="128"
+        font-family="'Courier New', 'SF Mono', 'Menlo', monospace"
+        font-size="13" fill="#8b949e" letter-spacing="2.5">RAG-POWERED VULNERABILITY SCANNER</text>
+
+  <!-- ─── Ecosystem pills ─────────────────────────────────────── -->
+  <g font-family="'Courier New', 'SF Mono', monospace" font-size="11">
+    <!-- go -->
+    <rect x="175" y="143" width="32" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="191" y="156" text-anchor="middle" fill="#79c0ff">go</text>
+    <!-- python -->
+    <rect x="213" y="143" width="52" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="239" y="156" text-anchor="middle" fill="#79c0ff">python</text>
+    <!-- rust -->
+    <rect x="271" y="143" width="40" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="291" y="156" text-anchor="middle" fill="#ffa657">rust</text>
+    <!-- npm -->
+    <rect x="317" y="143" width="38" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="336" y="156" text-anchor="middle" fill="#f78166">npm</text>
+    <!-- maven -->
+    <rect x="361" y="143" width="52" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="387" y="156" text-anchor="middle" fill="#f78166">maven</text>
+    <!-- nuget -->
+    <rect x="419" y="143" width="48" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="443" y="156" text-anchor="middle" fill="#a5d6ff">nuget</text>
+    <!-- ruby -->
+    <rect x="473" y="143" width="40" height="18" rx="4" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+    <text x="493" y="156" text-anchor="middle" fill="#f78166">ruby</text>
+  </g>
+
+  <!-- ─── RAG / vector-graph decoration (right side) ─────────── -->
+  <g opacity="0.18">
+    <!-- nodes -->
+    <circle cx="660" cy="50"  r="5" fill="#ef4444"/>
+    <circle cx="710" cy="32"  r="3.5" fill="#6e7681"/>
+    <circle cx="755" cy="58"  r="6" fill="#6e7681"/>
+    <circle cx="800" cy="38"  r="3.5" fill="#6e7681"/>
+    <circle cx="845" cy="62"  r="4" fill="#6e7681"/>
+    <circle cx="880" cy="42"  r="3" fill="#ef4444"/>
+
+    <circle cx="640" cy="100" r="3.5" fill="#6e7681"/>
+    <circle cx="685" cy="88"  r="5"   fill="#6e7681"/>
+    <circle cx="730" cy="110" r="6"   fill="#ef4444"/>
+    <circle cx="775" cy="92"  r="3.5" fill="#6e7681"/>
+    <circle cx="820" cy="115" r="4"   fill="#6e7681"/>
+    <circle cx="870" cy="95"  r="5"   fill="#6e7681"/>
+
+    <circle cx="655" cy="148" r="4"   fill="#6e7681"/>
+    <circle cx="700" cy="135" r="3.5" fill="#6e7681"/>
+    <circle cx="745" cy="158" r="5"   fill="#6e7681"/>
+    <circle cx="790" cy="142" r="4"   fill="#ef4444"/>
+    <circle cx="840" cy="162" r="3.5" fill="#6e7681"/>
+    <circle cx="883" cy="145" r="4"   fill="#6e7681"/>
+
+    <!-- edges -->
+    <g stroke="#6e7681" stroke-width="1" fill="none">
+      <line x1="660" y1="50"  x2="710" y2="32"/>
+      <line x1="710" y1="32"  x2="755" y2="58"/>
+      <line x1="755" y1="58"  x2="800" y2="38"/>
+      <line x1="800" y1="38"  x2="845" y2="62"/>
+      <line x1="845" y1="62"  x2="880" y2="42"/>
+
+      <line x1="660" y1="50"  x2="640" y2="100"/>
+      <line x1="710" y1="32"  x2="685" y2="88"/>
+      <line x1="755" y1="58"  x2="730" y2="110"/>
+      <line x1="800" y1="38"  x2="775" y2="92"/>
+      <line x1="845" y1="62"  x2="820" y2="115"/>
+      <line x1="880" y1="42"  x2="870" y2="95"/>
+
+      <line x1="640" y1="100" x2="685" y2="88"/>
+      <line x1="685" y1="88"  x2="730" y2="110"/>
+      <line x1="730" y1="110" x2="775" y2="92"/>
+      <line x1="775" y1="92"  x2="820" y2="115"/>
+      <line x1="820" y1="115" x2="870" y2="95"/>
+
+      <line x1="640" y1="100" x2="655" y2="148"/>
+      <line x1="685" y1="88"  x2="700" y2="135"/>
+      <line x1="730" y1="110" x2="745" y2="158"/>
+      <line x1="775" y1="92"  x2="790" y2="142"/>
+      <line x1="820" y1="115" x2="840" y2="162"/>
+      <line x1="870" y1="95"  x2="883" y2="145"/>
+
+      <line x1="655" y1="148" x2="700" y2="135"/>
+      <line x1="700" y1="135" x2="745" y2="158"/>
+      <line x1="745" y1="158" x2="790" y2="142"/>
+      <line x1="790" y1="142" x2="840" y2="162"/>
+      <line x1="840" y1="162" x2="883" y2="145"/>
+    </g>
+
+    <!-- highlight edges touching red nodes (similarity matches) -->
+    <g stroke="#ef4444" stroke-width="1.2" fill="none" opacity="0.6">
+      <line x1="660" y1="50"  x2="685" y2="88"/>
+      <line x1="730" y1="110" x2="700" y2="135"/>
+      <line x1="730" y1="110" x2="745" y2="158"/>
+      <line x1="790" y1="142" x2="745" y2="158"/>
+      <line x1="880" y1="42"  x2="845" y2="62"/>
+    </g>
+  </g>
+
+  <!-- small "vector search" label on the right decoration -->
+  <text x="690" y="174"
+        font-family="'Courier New', monospace"
+        font-size="9" fill="#484f58" letter-spacing="1.5">VECTOR SIMILARITY SEARCH</text>
+</svg>

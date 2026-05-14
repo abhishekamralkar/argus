@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const maxFeedBytes int64 = 512 << 20 // 512 MB hard limit per feed
+
 // Cache stores downloaded zip archives on disk and uses conditional HTTP
 // requests (ETag / Last-Modified) to avoid re-downloading unchanged feeds.
 type Cache struct {
@@ -105,18 +107,36 @@ func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
 		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	const maxBytes = 512 << 20
-	lr := io.LimitReader(resp.Body, maxBytes+1)
-	data, err := io.ReadAll(lr)
+	// Stream the response directly to a temp file, then atomically rename it
+	// to the cache path. This avoids holding the entire compressed zip in memory
+	// during the download (previously up to 512 MB as a []byte).
+	tmp, err := os.CreateTemp(filepath.Dir(zipPath), ".dl-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("download %s: create temp: %w", url, err)
+	}
+	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		_ = tmp.Close()
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxFeedBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("download %s: read body: %w", url, err)
 	}
-	if int64(len(data)) > maxBytes {
+	if n > maxFeedBytes {
 		return nil, fmt.Errorf("download %s: response exceeds 512 MB size limit", url)
 	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("download %s: flush: %w", url, err)
+	}
 
-	// Persist to cache (best-effort — a write failure does not abort the ingest).
-	if writeErr := os.WriteFile(zipPath, data, 0o600); writeErr == nil {
+	// Atomic rename to the cache path (best-effort).
+	if renameErr := os.Rename(tmpName, zipPath); renameErr == nil {
+		renamed = true
 		m = meta{
 			ETag:         resp.Header.Get("ETag"),
 			LastModified: resp.Header.Get("Last-Modified"),
@@ -127,7 +147,12 @@ func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
 		}
 	}
 
-	return zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	// Read from the cache file (or the still-present temp file if rename failed).
+	target := zipPath
+	if !renamed {
+		target = tmpName
+	}
+	return readCachedZip(target)
 }
 
 func readCachedZip(path string) (*zip.Reader, error) {

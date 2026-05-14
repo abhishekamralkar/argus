@@ -31,6 +31,17 @@ func Open(path string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
+// OpenReadOnly opens the database in read-only mode. The schema migration is
+// skipped because a read-only connection cannot write. The caller must ensure
+// the database has already been initialised by a previous Open call.
+func OpenReadOnly(path string) (*DB, error) {
+	db, err := sql.Open("duckdb", path+"?access_mode=read_only")
+	if err != nil {
+		return nil, err
+	}
+	return &DB{db: db}, nil
+}
+
 func (s *DB) Close() error {
 	return s.db.Close()
 }
