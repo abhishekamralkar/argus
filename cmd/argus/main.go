@@ -314,6 +314,11 @@ func ingestCmd(dbPath *string) *cobra.Command {
 					errs = append(errs, fmt.Errorf("%s: %w", eco, err))
 				}
 			}
+			// Record the embedding model and dimension so scan can detect mismatches.
+			if dim, probeErr := embedder.Dimension(ctx); probeErr == nil {
+				_ = db.SetMeta(ctx, "embed_model", embedder.Model())
+				_ = db.SetMeta(ctx, "embed_dim", strconv.Itoa(dim))
+			}
 			return errors.Join(errs...)
 		},
 	}
@@ -793,6 +798,10 @@ func scanCmd(dbPath *string) *cobra.Command {
 
 			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
 			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
+
+			if err := checkEmbedCompatibility(ctx, db, embedder); err != nil {
+				return err
+			}
 
 			if multi {
 				return runMultiScan(ctx, args, db, embedder, generator, multiScanOpts{
@@ -1581,4 +1590,39 @@ func newScanRunID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// checkEmbedCompatibility compares the dimension of the configured embedder
+// against the dimension stored in the database meta table. It returns an error
+// with a clear remediation message when they differ, preventing silently wrong
+// similarity results that would arise from a mismatched embedding model.
+// The check is skipped when the database has no stored dimension (e.g. the DB
+// was created before this feature was added, or is empty).
+func checkEmbedCompatibility(ctx context.Context, db *store.DB, embedder *embed.Client) error {
+	storedDimStr, ok, err := db.GetMeta(ctx, "embed_dim")
+	if err != nil || !ok {
+		return nil
+	}
+	storedDim, err := strconv.Atoi(storedDimStr)
+	if err != nil {
+		return nil
+	}
+	currentDim, err := embedder.Dimension(ctx)
+	if err != nil {
+		return nil
+	}
+	if currentDim == storedDim {
+		return nil
+	}
+	storedModel, _, _ := db.GetMeta(ctx, "embed_model")
+	hint := storedModel
+	if hint == "" {
+		hint = fmt.Sprintf("%d-dim model", storedDim)
+	}
+	return fmt.Errorf(
+		"embedding dimension mismatch: database was built with %s (dim=%d), "+
+			"current model %q outputs dim=%d; "+
+			"re-run 'argus ingest' with the same model or reset the database",
+		hint, storedDim, embedder.Model(), currentDim,
+	)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -46,6 +47,28 @@ func (s *DB) Close() error {
 	return s.db.Close()
 }
 
+// SetMeta stores a key-value pair in the _meta table, overwriting any existing value.
+func (s *DB) SetMeta(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		key, value)
+	return err
+}
+
+// GetMeta retrieves a value from the _meta table.
+// Returns ("", false, nil) when the key does not exist.
+func (s *DB) GetMeta(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM _meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
 func migrate(db *sql.DB) error {
 	// Create tables (no-op if they already exist with original schema)
 	if _, err := db.ExecContext(context.Background(), `
@@ -81,6 +104,10 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS aliases VARCHAR`,
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_score FLOAT`,
 		`ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS cvss_vector VARCHAR`,
+		`CREATE TABLE IF NOT EXISTS _meta (
+			key   VARCHAR PRIMARY KEY,
+			value VARCHAR NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS scan_runs (
 			id             TEXT        NOT NULL,
 			project_dir    TEXT        NOT NULL,

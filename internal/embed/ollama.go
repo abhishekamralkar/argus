@@ -146,6 +146,20 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return nil, lastErr
 }
 
+// Model returns the embedding model name configured for this client.
+func (c *Client) Model() string { return c.model }
+
+// Dimension probes the model by embedding a short sentinel string and returns
+// the length of the resulting vector. The result reflects the true output
+// dimension for the configured model.
+func (c *Client) Dimension(ctx context.Context) (int, error) {
+	vec, err := c.Embed(ctx, "probe")
+	if err != nil {
+		return 0, fmt.Errorf("probe embed dimension: %w", err)
+	}
+	return len(vec), nil
+}
+
 // ── Ollama format ────────────────────────────────────────────────────────────
 
 type ollamaEmbedRequest struct {
