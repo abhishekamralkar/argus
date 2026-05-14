@@ -87,7 +87,7 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 		// Try plain label first; fall back to CVSS vector computation.
 		if norm := normalizeSeverity(s.Score); norm != "" {
 			sev = norm
-		} else if score, ok := cvssV3BaseScore(s.Score); ok {
+		} else if score, ok := parseCVSSScore(s.Score); ok {
 			sev = cvssScoreToSeverity(score)
 			if score > bestCVSSScore {
 				bestCVSSScore = score

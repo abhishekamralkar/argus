@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+
 func TestCvssScoreToSeverity(t *testing.T) {
 	cases := []struct {
 		score float64
@@ -27,39 +28,32 @@ func TestCvssScoreToSeverity(t *testing.T) {
 	}
 }
 
-func TestCvssV3BaseScore(t *testing.T) {
+func TestParseCVSSScore(t *testing.T) {
 	cases := []struct {
 		vector    string
 		wantScore float64
 		wantOK    bool
 	}{
-		// Network-reachable, low complexity, no privileges, no user interaction, scope unchanged, High CIA
-		// Expected: ~9.8 (CRITICAL)
+		// CVSS 3.1 — standard NVD test vectors
 		{"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8, true},
-		// Network, low complexity, no priv, no UI, scope unchanged, High C only
-		// Expected: ~7.5 (HIGH)
 		{"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", 7.5, true},
-		// Local, high complexity, high priv, required UI, scope unchanged, Low CIA
-		// Expected: low score
 		{"CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N", 1.8, true},
-		// Scope changed, network, low AC, no priv, no UI, High CIA
-		// Expected: 10.0 (CRITICAL)
 		{"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", 10.0, true},
-		// All None CIA → base score 0
 		{"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N", 0.0, true},
-		// Malformed vector
+		// CVSS 4.0 — network attack, no subsequent-system impact → 9.30 per spec
+		{"CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N", 9.30, true},
+		// Malformed / unrecognised
 		{"notavector", 0, false},
-		// Missing metrics
 		{"CVSS:3.1/AV:N/AC:L", 0, false},
 	}
 	for _, c := range cases {
-		got, ok := cvssV3BaseScore(c.vector)
+		got, ok := parseCVSSScore(c.vector)
 		if ok != c.wantOK {
-			t.Errorf("cvssV3BaseScore(%q) ok=%v, want %v", c.vector, ok, c.wantOK)
+			t.Errorf("parseCVSSScore(%q) ok=%v, want %v", c.vector, ok, c.wantOK)
 			continue
 		}
 		if ok && math.Abs(got-c.wantScore) > 0.15 {
-			t.Errorf("cvssV3BaseScore(%q) = %.2f, want ~%.2f", c.vector, got, c.wantScore)
+			t.Errorf("parseCVSSScore(%q) = %.2f, want ~%.2f", c.vector, got, c.wantScore)
 		}
 	}
 }
