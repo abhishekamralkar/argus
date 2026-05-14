@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -51,11 +52,12 @@ func safeTruncate(s string, maxBytes int) string {
 // Set OPENAI_API_KEY or OPENAI_BASE_URL to enable OpenAI-compatible mode.
 // Use NewClientWithConfig for explicit control.
 type Client struct {
-	baseURL    string
-	model      string
-	apiKey     string
-	openaiMode bool
-	client     *http.Client
+	baseURL     string
+	model       string
+	apiKey      string
+	openaiMode  bool
+	client      *http.Client
+	noBatchAPI  atomic.Bool // true after /api/embed 404 (older Ollama)
 }
 
 // Config parameterises the embed client explicitly.
@@ -160,6 +162,43 @@ func (c *Client) Dimension(ctx context.Context) (int, error) {
 	return len(vec), nil
 }
 
+// BatchEmbed returns embedding vectors for all texts in a single server round-
+// trip where possible. For Ollama it uses the /api/embed endpoint (available
+// since Ollama 0.1.31); on a 404 it falls back to sequential /api/embeddings
+// calls and remembers the fallback for the lifetime of the client. For
+// OpenAI-compatible servers the standard array input is used directly.
+func (c *Client) BatchEmbed(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	for i, t := range texts {
+		texts[i] = safeTruncate(t, maxTextBytes)
+	}
+	var lastErr error
+	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		var (
+			vecs [][]float32
+			err  error
+		)
+		if c.openaiMode {
+			vecs, err = c.doEmbedBatchOpenAI(ctx, texts)
+		} else {
+			vecs, err = c.doEmbedBatchOllama(ctx, texts)
+		}
+		if err == nil {
+			return vecs, nil
+		}
+		if errors.As(err, new(*permanentError)) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // ── Ollama format ────────────────────────────────────────────────────────────
 
 type ollamaEmbedRequest struct {
@@ -253,4 +292,108 @@ func (c *Client) doEmbedOpenAI(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("embed: empty embedding returned")
 	}
 	return out.Data[0].Embedding, nil
+}
+
+// ── batch helpers ─────────────────────────────────────────────────────────────
+
+type ollamaEmbedBatchRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+type ollamaEmbedBatchResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+func (c *Client) doEmbedBatchOllama(ctx context.Context, texts []string) ([][]float32, error) {
+	if c.noBatchAPI.Load() {
+		return c.embedSequential(ctx, texts)
+	}
+	body, err := json.Marshal(ollamaEmbedBatchRequest{Model: c.model, Input: texts})
+	if err != nil {
+		return nil, fmt.Errorf("marshal batch embed request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/embed", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		c.noBatchAPI.Store(true)
+		return c.embedSequential(ctx, texts)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, &permanentError{fmt.Errorf("ollama batch embed: HTTP %d", resp.StatusCode)}
+		}
+		return nil, fmt.Errorf("ollama batch embed: HTTP %d", resp.StatusCode)
+	}
+	var out ollamaEmbedBatchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if len(out.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("ollama batch embed: got %d embeddings for %d inputs", len(out.Embeddings), len(texts))
+	}
+	return out.Embeddings, nil
+}
+
+// embedSequential is the fallback for older Ollama that lacks /api/embed.
+func (c *Client) embedSequential(ctx context.Context, texts []string) ([][]float32, error) {
+	vecs := make([][]float32, len(texts))
+	for i, t := range texts {
+		v, err := c.doEmbedOllama(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		vecs[i] = v
+	}
+	return vecs, nil
+}
+
+type openAIBatchEmbedRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+func (c *Client) doEmbedBatchOpenAI(ctx context.Context, texts []string) ([][]float32, error) {
+	body, err := json.Marshal(openAIBatchEmbedRequest{Model: c.model, Input: texts})
+	if err != nil {
+		return nil, fmt.Errorf("marshal batch embed request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		if !isRetryableStatus(resp.StatusCode) {
+			return nil, &permanentError{fmt.Errorf("batch embed: HTTP %d", resp.StatusCode)}
+		}
+		return nil, fmt.Errorf("batch embed: HTTP %d", resp.StatusCode)
+	}
+	var out openAIEmbedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	vecs := make([][]float32, len(out.Data))
+	for i, d := range out.Data {
+		vecs[i] = d.Embedding
+	}
+	return vecs, nil
 }

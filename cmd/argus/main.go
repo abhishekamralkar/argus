@@ -338,7 +338,10 @@ func ingestCmd(dbPath *string) *cobra.Command {
 	return cmd
 }
 
-const batchSize = 50
+const (
+	batchSize      = 50 // DB write batch size
+	embedBatchSize = 32 // embedding API mini-batch size
+)
 
 func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cache.Cache, ecosystem string, numWorkers int, skipExisting bool, cc chunkConfig, quiet bool, globalSince time.Time, full bool) error {
 	type source struct {
@@ -496,14 +499,32 @@ func ingestSourceWhole(
 	var wg sync.WaitGroup
 	for range numWorkers {
 		wg.Go(func() {
-			for v := range workCh {
-				vec, err := embedder.Embed(ctx, v.Summary+"\n"+v.Details)
-				if err != nil {
-					slog.Warn("embed failed, skipping vulnerability", "vuln_id", v.ID, "source", name, "error", err)
-					errCount.Add(1)
-					continue
+			pending := make([]*store.Vulnerability, 0, embedBatchSize)
+			flush := func() {
+				texts := make([]string, len(pending))
+				for i, v := range pending {
+					texts[i] = v.Summary + "\n" + v.Details
 				}
-				resultCh <- store.EmbeddedVuln{Vuln: v, Embedding: vec}
+				vecs, err := embedder.BatchEmbed(ctx, texts)
+				if err != nil {
+					slog.Warn("batch embed failed, skipping", "count", len(pending), "source", name, "error", err)
+					errCount.Add(int64(len(pending)))
+					pending = pending[:0]
+					return
+				}
+				for i, v := range pending {
+					resultCh <- store.EmbeddedVuln{Vuln: v, Embedding: vecs[i]}
+				}
+				pending = pending[:0]
+			}
+			for v := range workCh {
+				pending = append(pending, v)
+				if len(pending) >= embedBatchSize {
+					flush()
+				}
+			}
+			if len(pending) > 0 {
+				flush()
 			}
 		})
 	}
@@ -574,22 +595,40 @@ func ingestSourceChunked(
 	var wg sync.WaitGroup
 	for range numWorkers {
 		wg.Go(func() {
-			for w := range workCh {
-				vec, err := embedder.Embed(ctx, w.text)
+			pending := make([]chunkWork, 0, embedBatchSize)
+			flush := func() {
+				texts := make([]string, len(pending))
+				for i, w := range pending {
+					texts[i] = w.text
+				}
+				vecs, err := embedder.BatchEmbed(ctx, texts)
 				if err != nil {
-					slog.Warn("embed failed, dropping chunk", "vuln_id", w.vuln.ID, "chunk_id", w.chunkID, "source", name, "error", err)
-					errCount.Add(1)
-					continue
+					slog.Warn("batch embed failed, dropping chunks", "count", len(pending), "source", name, "error", err)
+					errCount.Add(int64(len(pending)))
+					pending = pending[:0]
+					return
 				}
-				resultCh <- chunkResult{
-					vuln: w.vuln,
-					item: store.ChunkItem{
-						ChunkID:   w.chunkID,
-						VulnID:    w.vuln.ID,
-						Content:   w.text,
-						Embedding: vec,
-					},
+				for i, w := range pending {
+					resultCh <- chunkResult{
+						vuln: w.vuln,
+						item: store.ChunkItem{
+							ChunkID:   w.chunkID,
+							VulnID:    w.vuln.ID,
+							Content:   w.text,
+							Embedding: vecs[i],
+						},
+					}
 				}
+				pending = pending[:0]
+			}
+			for w := range workCh {
+				pending = append(pending, w)
+				if len(pending) >= embedBatchSize {
+					flush()
+				}
+			}
+			if len(pending) > 0 {
+				flush()
 			}
 		})
 	}
