@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/abhishekamralkar/argus/internal/errs"
 )
 
 const (
@@ -32,6 +34,22 @@ type permanentError struct{ error }
 
 func isRetryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// httpErr returns a permanentError wrapping a typed error for actionable HTTP
+// codes (401/403 → ErrAuth, 404 → ErrModelNotFound) or a plain formatted
+// error for other non-retryable codes.
+func (c *Client) httpErr(code int, service string) error {
+	var inner error
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		inner = &errs.ErrAuth{Service: service, Code: code}
+	case http.StatusNotFound:
+		inner = &errs.ErrModelNotFound{Model: c.model, Service: service}
+	default:
+		inner = fmt.Errorf("%s: HTTP %d", service, code)
+	}
+	return &permanentError{inner}
 }
 
 // safeTruncate trims s to at most maxBytes without splitting a UTF-8 codepoint.
@@ -229,7 +247,7 @@ func (c *Client) doEmbedOllama(ctx context.Context, text string) ([]float32, err
 
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			return nil, &permanentError{fmt.Errorf("ollama embed: HTTP %d", resp.StatusCode)}
+			return nil, c.httpErr(resp.StatusCode, "ollama embed")
 		}
 		return nil, fmt.Errorf("ollama embed: HTTP %d", resp.StatusCode)
 	}
@@ -279,7 +297,7 @@ func (c *Client) doEmbedOpenAI(ctx context.Context, text string) ([]float32, err
 
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			return nil, &permanentError{fmt.Errorf("embed: HTTP %d", resp.StatusCode)}
+			return nil, c.httpErr(resp.StatusCode, "embed")
 		}
 		return nil, fmt.Errorf("embed: HTTP %d", resp.StatusCode)
 	}
@@ -330,7 +348,7 @@ func (c *Client) doEmbedBatchOllama(ctx context.Context, texts []string) ([][]fl
 	}
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			return nil, &permanentError{fmt.Errorf("ollama batch embed: HTTP %d", resp.StatusCode)}
+			return nil, c.httpErr(resp.StatusCode, "ollama batch embed")
 		}
 		return nil, fmt.Errorf("ollama batch embed: HTTP %d", resp.StatusCode)
 	}
@@ -383,7 +401,7 @@ func (c *Client) doEmbedBatchOpenAI(ctx context.Context, texts []string) ([][]fl
 
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			return nil, &permanentError{fmt.Errorf("batch embed: HTTP %d", resp.StatusCode)}
+			return nil, c.httpErr(resp.StatusCode, "batch embed")
 		}
 		return nil, fmt.Errorf("batch embed: HTTP %d", resp.StatusCode)
 	}

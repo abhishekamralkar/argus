@@ -26,6 +26,7 @@ import (
 	"github.com/abhishekamralkar/argus/internal/config"
 	"github.com/abhishekamralkar/argus/internal/doctor"
 	"github.com/abhishekamralkar/argus/internal/embed"
+	argerr "github.com/abhishekamralkar/argus/internal/errs"
 	"github.com/abhishekamralkar/argus/internal/ignore"
 	"github.com/abhishekamralkar/argus/internal/ingest"
 	"github.com/abhishekamralkar/argus/internal/llm"
@@ -310,7 +311,7 @@ func ingestCmd(dbPath *string) *cobra.Command {
 					break
 				}
 				if err := runIngest(ctx, db, embedder, feedCache, eco, workers, skipExisting, cc, quiet, sinceTime, full); err != nil {
-					fmt.Fprintf(os.Stderr, "ingest %s: %v\n", eco, err)
+					fmt.Fprintf(os.Stderr, "ingest %s: %s\n", eco, formatError(err))
 					errs = append(errs, fmt.Errorf("%s: %w", eco, err))
 				}
 			}
@@ -1629,6 +1630,20 @@ func newScanRunID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// formatError returns a user-friendly string for known structured error types,
+// falling back to err.Error() for everything else.
+func formatError(err error) string {
+	var authErr *argerr.ErrAuth
+	if errors.As(err, &authErr) {
+		return authErr.Error() + "\nhint: set OPENAI_API_KEY (or OLLAMA_HOST for local Ollama)"
+	}
+	var modelErr *argerr.ErrModelNotFound
+	if errors.As(err, &modelErr) {
+		return modelErr.Error()
+	}
+	return err.Error()
 }
 
 // checkEmbedCompatibility compares the dimension of the configured embedder

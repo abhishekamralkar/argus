@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/abhishekamralkar/argus/internal/errs"
 )
 
 const (
@@ -31,6 +33,21 @@ type permanentError struct{ error }
 
 func isRetryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// httpErr builds a permanentError wrapping a typed error for actionable HTTP
+// codes: 401/403 → ErrAuth, 404 → ErrModelNotFound.
+func (c *Client) httpErr(code int, service string) error {
+	var inner error
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		inner = &errs.ErrAuth{Service: service, Code: code}
+	case http.StatusNotFound:
+		inner = &errs.ErrModelNotFound{Model: c.model, Service: service}
+	default:
+		inner = fmt.Errorf("%s: HTTP %d", service, code)
+	}
+	return &permanentError{inner}
 }
 
 // Client calls an LLM for text generation. It supports two wire formats:
@@ -172,7 +189,7 @@ func (c *Client) doGenerateOllama(ctx context.Context, prompt string, out io.Wri
 
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			return &permanentError{fmt.Errorf("ollama generate: HTTP %d", resp.StatusCode)}
+			return c.httpErr(resp.StatusCode, "ollama generate")
 		}
 		return fmt.Errorf("ollama generate: HTTP %d", resp.StatusCode)
 	}
@@ -241,8 +258,7 @@ func (c *Client) doGenerateOpenAI(ctx context.Context, prompt string, out io.Wri
 
 	if resp.StatusCode != http.StatusOK {
 		if !isRetryableStatus(resp.StatusCode) {
-			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			return &permanentError{fmt.Errorf("llm generate: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(errBody))}
+			return c.httpErr(resp.StatusCode, "llm generate")
 		}
 		return fmt.Errorf("llm generate: HTTP %d", resp.StatusCode)
 	}
