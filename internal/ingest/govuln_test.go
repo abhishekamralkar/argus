@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestCvssScoreToSeverity(t *testing.T) {
 	cases := []struct {
 		score float64

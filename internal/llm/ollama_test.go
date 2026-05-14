@@ -36,7 +36,7 @@ func TestGenerate_Success(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(), "prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if sb.String() != "hello world" {
@@ -57,7 +57,7 @@ func TestGenerate_HTTP500RetrySucceeds(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(), "prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if calls != 2 {
@@ -108,7 +108,7 @@ func TestGenerate_MalformedChunksSkipped(t *testing.T) {
 	defer srv.Close()
 
 	var sb strings.Builder
-	if err := newTestClient(srv).Generate(context.Background(),"prompt", &sb); err != nil {
+	if err := newTestClient(srv).Generate(context.Background(), "prompt", &sb); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if sb.String() != "good" {

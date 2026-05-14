@@ -57,9 +57,8 @@ func (s *DB) SetMeta(ctx context.Context, key, value string) error {
 
 // GetMeta retrieves a value from the _meta table.
 // Returns ("", false, nil) when the key does not exist.
-func (s *DB) GetMeta(ctx context.Context, key string) (string, bool, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM _meta WHERE key = ?`, key).Scan(&value)
+func (s *DB) GetMeta(ctx context.Context, key string) (value string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT value FROM _meta WHERE key = ?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

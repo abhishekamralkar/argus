@@ -32,6 +32,28 @@ var sharedTransport = &http.Transport{
 // permanentError wraps a non-retryable error (e.g. HTTP 401, 400, 404).
 type permanentError struct{ error }
 
+// Client calls an embedding model. It supports two wire formats:
+//   - Ollama: POST /api/embeddings with {"model","prompt"}
+//   - OpenAI-compatible: POST /v1/embeddings with {"model","input"}
+//
+// Set OPENAI_API_KEY or OPENAI_BASE_URL to enable OpenAI-compatible mode.
+// Use NewClientWithConfig for explicit control.
+type Client struct {
+	baseURL    string
+	model      string
+	apiKey     string
+	openaiMode bool
+	client     *http.Client
+	noBatchAPI atomic.Bool // true after /api/embed 404 (older Ollama)
+}
+
+// Config parameterises the embed client explicitly.
+type Config struct {
+	Model   string
+	BaseURL string
+	APIKey  string
+}
+
 func isRetryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
 }
@@ -61,28 +83,6 @@ func safeTruncate(s string, maxBytes int) string {
 		maxBytes--
 	}
 	return s[:maxBytes]
-}
-
-// Client calls an embedding model. It supports two wire formats:
-//   - Ollama: POST /api/embeddings with {"model","prompt"}
-//   - OpenAI-compatible: POST /v1/embeddings with {"model","input"}
-//
-// Set OPENAI_API_KEY or OPENAI_BASE_URL to enable OpenAI-compatible mode.
-// Use NewClientWithConfig for explicit control.
-type Client struct {
-	baseURL     string
-	model       string
-	apiKey      string
-	openaiMode  bool
-	client      *http.Client
-	noBatchAPI  atomic.Bool // true after /api/embed 404 (older Ollama)
-}
-
-// Config parameterises the embed client explicitly.
-type Config struct {
-	Model   string
-	BaseURL string
-	APIKey  string
 }
 
 // NewClient constructs a Client by reading environment variables.

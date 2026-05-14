@@ -59,9 +59,6 @@ func Run(ctx context.Context, cfg Config) []Check {
 		if llmURL == "" {
 			llmURL = "https://api.openai.com/v1"
 		}
-		if embedURL == "" {
-			embedURL = "https://api.openai.com/v1"
-		}
 	} else {
 		host := cfg.OllamaHost
 		if host == "" {
@@ -72,9 +69,6 @@ func Run(ctx context.Context, cfg Config) []Check {
 		}
 		if llmURL == "" {
 			llmURL = host
-		}
-		if embedURL == "" {
-			embedURL = host
 		}
 	}
 
@@ -268,7 +262,7 @@ func fetchOllamaModels(ctx context.Context, baseURL string) ([]string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Ollama returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("ollama returned HTTP %d", resp.StatusCode)
 	}
 	var tags ollamaTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {

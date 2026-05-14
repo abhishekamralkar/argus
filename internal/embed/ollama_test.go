@@ -30,7 +30,7 @@ func TestEmbed_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := newTestClient(srv).Embed(context.Background(),"test query")
+	got, err := newTestClient(srv).Embed(context.Background(), "test query")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}

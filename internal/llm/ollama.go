@@ -31,25 +31,6 @@ var sharedTransport = &http.Transport{
 // permanentError wraps a non-retryable error (e.g. HTTP 401, 400, 404).
 type permanentError struct{ error }
 
-func isRetryableStatus(code int) bool {
-	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
-}
-
-// httpErr builds a permanentError wrapping a typed error for actionable HTTP
-// codes: 401/403 → ErrAuth, 404 → ErrModelNotFound.
-func (c *Client) httpErr(code int, service string) error {
-	var inner error
-	switch code {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		inner = &errs.ErrAuth{Service: service, Code: code}
-	case http.StatusNotFound:
-		inner = &errs.ErrModelNotFound{Model: c.model, Service: service}
-	default:
-		inner = fmt.Errorf("%s: HTTP %d", service, code)
-	}
-	return &permanentError{inner}
-}
-
 // Client calls an LLM for text generation. It supports two wire formats:
 //   - Ollama: POST /api/generate with NDJSON streaming
 //   - OpenAI-compatible: POST /v1/chat/completions with SSE streaming
@@ -70,6 +51,25 @@ type Config struct {
 	Model   string
 	BaseURL string // empty = auto-detect from env
 	APIKey  string // empty = use OPENAI_API_KEY env var
+}
+
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// httpErr builds a permanentError wrapping a typed error for actionable HTTP
+// codes: 401/403 → ErrAuth, 404 → ErrModelNotFound.
+func (c *Client) httpErr(code int, service string) error {
+	var inner error
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		inner = &errs.ErrAuth{Service: service, Code: code}
+	case http.StatusNotFound:
+		inner = &errs.ErrModelNotFound{Model: c.model, Service: service}
+	default:
+		inner = fmt.Errorf("%s: HTTP %d", service, code)
+	}
+	return &permanentError{inner}
 }
 
 func (c *Client) Model() string { return c.model }
