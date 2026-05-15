@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -134,7 +135,8 @@ func (c *Client) Generate(ctx context.Context, prompt string, out io.Writer) err
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*attempt) * 2 * time.Second)
+			base := time.Duration(attempt*attempt) * 2 * time.Second
+			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
 		}
 		var err error
 		if c.openaiMode {
