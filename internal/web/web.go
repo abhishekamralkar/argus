@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/abhishekamralkar/argus/internal/store"
@@ -102,7 +103,20 @@ func Serve(cfg Config) error {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
-		runs, err := db.ListScanRuns(ctx, 100)
+		limit := 50
+		offset := 0
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+
+		runs, err := db.ListScanRuns(ctx, limit, offset)
 		if err != nil {
 			slog.Warn("dashboard: scan runs query failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)

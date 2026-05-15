@@ -420,7 +420,7 @@ func TestSaveAndListScanRuns(t *testing.T) {
 	db := openTemp(t)
 
 	// Empty table returns empty slice, not error.
-	runs, err := db.ListScanRuns(bg, 10)
+	runs, err := db.ListScanRuns(bg, 10, 0)
 	if err != nil {
 		t.Fatalf("ListScanRuns on empty table: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestSaveAndListScanRuns(t *testing.T) {
 	}
 
 	// List returns newest first.
-	runs, err = db.ListScanRuns(bg, 10)
+	runs, err = db.ListScanRuns(bg, 10, 0)
 	if err != nil {
 		t.Fatalf("ListScanRuns: %v", err)
 	}
@@ -480,12 +480,21 @@ func TestListScanRuns_Limit(t *testing.T) {
 			t.Fatalf("SaveScanRun: %v", err)
 		}
 	}
-	runs, err := db.ListScanRuns(bg, 3)
+	runs, err := db.ListScanRuns(bg, 3, 0)
 	if err != nil {
 		t.Fatalf("ListScanRuns: %v", err)
 	}
 	if len(runs) != 3 {
 		t.Errorf("expected 3 (limited), got %d", len(runs))
+	}
+
+	// Offset skips oldest (all same timestamp, so just check count).
+	runs, err = db.ListScanRuns(bg, 3, 3)
+	if err != nil {
+		t.Fatalf("ListScanRuns with offset: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Errorf("expected 2 runs with offset=3, got %d", len(runs))
 	}
 }
 

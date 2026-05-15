@@ -50,6 +50,11 @@ tr:hover td{background:#1c2128}
   <section>
     <h2>Recent Scan History</h2>
     <div id="scans-container"><div class="loading">Loading…</div></div>
+    <div id="scans-pagination" style="display:none;margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center">
+      <button id="btn-prev" onclick="changePage(-1)" style="padding:0.3rem 0.8rem;cursor:pointer">← Prev</button>
+      <span id="page-label" style="font-size:0.85rem;color:#8b949e"></span>
+      <button id="btn-next" onclick="changePage(1)" style="padding:0.3rem 0.8rem;cursor:pointer">Next →</button>
+    </div>
   </section>
 
   <section>
@@ -58,6 +63,9 @@ tr:hover td{background:#1c2128}
   </section>
 </main>
 <script>
+const PAGE_SIZE=20;
+let scanOffset=0;
+
 function sev(n,cls){return n>0?`<span class="badge badge-${cls}">${n}</span>`:`<span style="color:#484f58">0</span>`}
 
 function fmtDate(iso){
@@ -67,11 +75,22 @@ function fmtDate(iso){
 
 function renderScans(runs){
   const el=document.getElementById('scans-container');
+  const pg=document.getElementById('scans-pagination');
+  const prev=document.getElementById('btn-prev');
+  const next=document.getElementById('btn-next');
+  const lbl=document.getElementById('page-label');
   if(!runs||runs.length===0){
-    el.innerHTML='<div class="empty">No scan history yet. Run <code>argus scan &lt;project-dir&gt;</code> to record your first scan.</div>';
+    if(scanOffset===0){
+      el.innerHTML='<div class="empty">No scan history yet. Run <code>argus scan &lt;project-dir&gt;</code> to record your first scan.</div>';
+      pg.style.display='none';
+    } else {
+      scanOffset=Math.max(0,scanOffset-PAGE_SIZE);
+      loadScans();
+    }
     return;
   }
-  document.getElementById('stat-runs').textContent=runs.length;
+  const page=Math.floor(scanOffset/PAGE_SIZE)+1;
+  document.getElementById('stat-runs').textContent=scanOffset+runs.length;
   let rows=runs.map(r=>{
     const proj=r.project_dir.length>48?'…'+r.project_dir.slice(-45):r.project_dir;
     return `<tr>
@@ -86,6 +105,25 @@ function renderScans(runs){
     </tr>`;
   }).join('');
   el.innerHTML=`<table><thead><tr><th>Date</th><th>Project</th><th>Deps</th><th>Total</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table>`;
+  pg.style.display='flex';
+  prev.disabled=scanOffset===0;
+  next.disabled=runs.length<PAGE_SIZE;
+  lbl.textContent=`Page ${page}`;
+}
+
+function changePage(dir){
+  scanOffset=Math.max(0,scanOffset+dir*PAGE_SIZE);
+  loadScans();
+}
+
+async function loadScans(){
+  try{
+    const res=await fetch(`/api/v1/scans?limit=${PAGE_SIZE}&offset=${scanOffset}`);
+    const runs=await res.json();
+    renderScans(runs);
+  }catch(e){
+    document.getElementById('scans-container').innerHTML=`<div class="empty">Error loading scans: ${e.message}</div>`;
+  }
 }
 
 function renderDB(status){
@@ -109,18 +147,14 @@ function renderDB(status){
 
 async function load(){
   try{
-    const [statusRes,scansRes]=await Promise.all([
-      fetch('/api/v1/status'),
-      fetch('/api/v1/scans')
-    ]);
+    const statusRes=await fetch('/api/v1/status');
     const status=await statusRes.json();
-    const scans=await scansRes.json();
     if(status.db_path) document.getElementById('db-path').textContent=status.db_path;
     renderDB(status);
-    renderScans(scans);
   }catch(e){
     document.getElementById('scans-container').innerHTML=`<div class="empty">Error loading data: ${e.message}</div>`;
   }
+  loadScans();
 }
 load();
 </script>
