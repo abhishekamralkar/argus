@@ -2,6 +2,7 @@ package parser
 
 import (
 	"os"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 )
@@ -55,5 +56,11 @@ func ParseCargoToml(path string) ([]Dependency, error) {
 			Ecosystem: "rust",
 		})
 	}
+	sort.Slice(deps, func(i, j int) bool {
+		if deps[i].Name != deps[j].Name {
+			return deps[i].Name < deps[j].Name
+		}
+		return deps[i].Version < deps[j].Version
+	})
 	return deps, nil
 }
