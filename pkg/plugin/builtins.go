@@ -21,6 +21,7 @@ func builtins() []EcosystemPlugin {
 		npmPackagePlugin{},
 		csprojPlugin{},
 		simpleParser{name: "ruby", patterns: []string{"Gemfile.lock"}, fn: wrap(parser.ParseGemfileLock)},
+		simpleParser{name: "php", patterns: []string{"composer.lock"}, fn: wrap(parser.ParseComposerLock)},
 	}
 }
 

@@ -1,0 +1,9 @@
+{
+    "packages": [
+        {"name": "symfony/http-kernel", "version": "v6.3.4"},
+        {"name": "doctrine/orm", "version": "2.15.0"}
+    ],
+    "packages-dev": [
+        {"name": "phpunit/phpunit", "version": "10.3.2"}
+    ]
+}
