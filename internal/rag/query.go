@@ -333,6 +333,7 @@ func truncate(s string, maxLen int) string {
 //  1. Exact match (case-insensitive): "requests" == "requests"
 //  2. Module-path suffix: "github.com/foo/requests" has suffix "/requests"
 //  3. Whole-word scan of the vulnerability content (fallback for advisory text)
+//  4. For scoped npm packages (@scope/pkg), also try matching the unscoped name
 func packageMatches(vulnPackage, content, depName string) bool {
 	pkg := strings.ToLower(vulnPackage)
 	dep := strings.ToLower(depName)
@@ -342,12 +343,23 @@ func packageMatches(vulnPackage, content, depName string) bool {
 	if strings.HasSuffix(pkg, "/"+dep) {
 		return true
 	}
-	return containsWholeWord(strings.ToLower(content), dep)
+	lc := strings.ToLower(content)
+	if containsWholeWord(lc, dep) {
+		return true
+	}
+	// For scoped npm packages like @babel/core, also try matching the unscoped
+	// suffix ("core") so advisories that only mention the unscoped name still match.
+	if strings.HasPrefix(dep, "@") {
+		if _, unscoped, ok := strings.Cut(dep, "/"); ok && containsWholeWord(lc, unscoped) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsWholeWord reports whether word appears as a whole word in s, where
 // word boundaries are any character that is not part of a package/module name
-// (alphanumeric, hyphen, underscore, dot).
+// (alphanumeric, hyphen, underscore, dot, @, /).
 func containsWholeWord(s, word string) bool {
 	n := len(word)
 	for i := 0; i <= len(s)-n; i++ {
@@ -364,8 +376,9 @@ func containsWholeWord(s, word string) bool {
 
 // isPkgNameChar returns true for characters that can appear inside a package or
 // module name, used to detect word boundaries in vulnerability content.
+// Includes @ and / to treat scoped npm names like @babel/core as single tokens.
 func isPkgNameChar(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == '.'
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == '.' || b == '@' || b == '/'
 }
 
 // writerFunc adapts a func to io.Writer.
