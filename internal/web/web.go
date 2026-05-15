@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -58,15 +59,11 @@ func Serve(cfg Config) error {
 	mux := http.NewServeMux()
 
 	// Static assets — serve index.html at /.
-	fileServer := http.FileServer(http.FS(assets))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			r.URL.Path = "/assets/index.html"
-		} else {
-			r.URL.Path = "/assets" + r.URL.Path
-		}
-		fileServer.ServeHTTP(w, r)
-	})
+	subAssets, err := fs.Sub(assets, "assets")
+	if err != nil {
+		return fmt.Errorf("sub assets: %w", err)
+	}
+	mux.Handle("/", http.FileServer(http.FS(subAssets)))
 
 	// API endpoints.
 	mux.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {
