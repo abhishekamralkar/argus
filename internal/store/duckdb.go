@@ -314,8 +314,8 @@ func (s *DB) UpsertChunkBatch(ctx context.Context, chunks []ChunkItem) error {
 	return tx.Commit()
 }
 
-// ExistsVuln returns true if any chunks have been stored for this vulnerability ID.
-func (s *DB) ExistsVuln(ctx context.Context, id string) (bool, error) {
+// ExistsChunk returns true if any chunks have been stored for this vulnerability ID.
+func (s *DB) ExistsChunk(ctx context.Context, id string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM vulnerability_chunks WHERE vuln_id = ? LIMIT 1`, id).Scan(&n)
 	if err == sql.ErrNoRows {
