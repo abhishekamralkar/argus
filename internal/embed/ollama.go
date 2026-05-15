@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -144,7 +145,8 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			base := time.Duration(attempt) * 2 * time.Second
+			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
 		}
 		var (
 			vec []float32
@@ -195,7 +197,8 @@ func (c *Client) BatchEmbed(ctx context.Context, texts []string) ([][]float32, e
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			base := time.Duration(attempt) * 2 * time.Second
+			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
 		}
 		var (
 			vecs [][]float32
