@@ -2,13 +2,13 @@
   <img src="assets/argus-banner.svg" alt="Argus — RAG-powered vulnerability scanner" width="900"/>
 </p>
 
-A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, **Python**, **Rust**, **npm/Node.js**, **Maven/Java**, **NuGet/.NET**, and **Ruby** projects — powered by local [Ollama](https://ollama.com) models **or** any OpenAI-compatible API. No cloud lock-in. Your code stays on your machine.
+A RAG-based (Retrieval-Augmented Generation) vulnerability scanner for **Go**, **Python**, **Rust**, **npm/Node.js**, **Maven/Java**, **NuGet/.NET**, **Ruby**, and **PHP** projects — powered by local [Ollama](https://ollama.com) models **or** any OpenAI-compatible API. No cloud lock-in. Your code stays on your machine.
 
 [![CI](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/abhishekamralkar/argus/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://golang.org)
 [![Release](https://img.shields.io/github/v/release/abhishekamralkar/argus)](https://github.com/abhishekamralkar/argus/releases)
-[![Ecosystems](https://img.shields.io/badge/ecosystems-7-green.svg)](#supported-ecosystems)
+[![Ecosystems](https://img.shields.io/badge/ecosystems-8-green.svg)](#supported-ecosystems)
 
 ---
 
@@ -23,7 +23,7 @@ ollama pull nomic-embed-text
 ollama pull llama3.1:8b
 
 # 3. Ingest vulnerability databases (one-time, ~5–15 min; feeds cached locally)
-argus ingest --ecosystems go,python,rust,npm,maven,nuget
+argus ingest --ecosystems go,python,rust,npm,maven,nuget,ruby,php
 
 # 4. Check database and feed-cache status
 argus status
@@ -48,11 +48,11 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 ┌──────────────────────────────────────────────────────────────────────┐
 │                          INGEST (one-time)                           │
 │                                                                      │
-│  OSV (Go/PyPI/crates.io/npm/Maven/NuGet) ──┐                        │
-│  GoVulnDB ─────────────────────────────────┼──► Parse               │
-│  RustSec ──────────────────────────────────┤    Chunk (512 chars)   │
-│  PyPA ─────────────────────────────────────┘    Embed               │
-│                                                  ──► DuckDB (local)  │
+│  OSV (Go/PyPI/crates.io/npm/Maven/NuGet/RubyGems/Packagist) ──┐    │
+│  GoVulnDB ─────────────────────────────────────────────────────┼──► │
+│  RustSec ──────────────────────────────────────────────────────┤    │
+│  PyPA ─────────────────────────────────────────────────────────┘    │
+│       Parse → Chunk (512 chars, overlapping) → Embed → DuckDB      │
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -61,9 +61,11 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 │  go.mod / requirements.txt / Cargo.toml                             │
 │  package.json / package-lock.json                                   │
 │  pom.xml / *.csproj / packages.config                               │
+│  Gemfile.lock / composer.lock                                       │
 │       │                                                              │
 │       ▼                                                              │
-│  Parse deps ──► Embed query ──► Cosine search (DuckDB, top-k)      │
+│  Parse deps ──► Embed query (cached per dep@version)               │
+│                     ──► Cosine search (DuckDB, top-k)              │
 │                                       │                              │
 │                                       ▼                              │
 │              Ignore list · Alias dedup · Version filter             │
@@ -82,9 +84,9 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 |---|---|
 | **Privacy** | Fully local by default — Ollama + DuckDB on disk, zero external calls after ingest |
 | **OpenAI compat** | Drop-in OpenAI/LiteLLM/vLLM support via `--llm-base-url` / `--embed-base-url` |
-| **Languages** | Go, Python, Rust, npm/Node.js, Maven/Java, NuGet/.NET, Ruby |
-| **Dependency files** | `go.mod`, `requirements.txt`, `Cargo.toml`, `package.json`, `package-lock.json`, `pom.xml`, `*.csproj`, `packages.config`, `Gemfile.lock` |
-| **Data sources** | OSV (all ecosystems), GoVulnDB, RustSec, PyPA |
+| **Languages** | Go, Python, Rust, npm/Node.js, Maven/Java, NuGet/.NET, Ruby, PHP |
+| **Dependency files** | `go.mod`, `requirements.txt`, `Cargo.toml`, `package.json`, `package-lock.json`, `pom.xml`, `*.csproj`, `packages.config`, `Gemfile.lock`, `composer.lock` |
+| **Data sources** | OSV (Go, PyPI, crates.io, npm, Maven, NuGet, RubyGems, Packagist), GoVulnDB, RustSec, PyPA |
 | **Feed cache** | Zip archives cached in `~/.cache/argus/feeds` with ETag/Last-Modified — repeated ingests are instant |
 | **Retrieval** | Document chunking (512-char overlapping), semantic cosine search, configurable `--top-k` |
 | **Accuracy** | Version-aware CVE filtering — already-fixed advisories are silently skipped |
@@ -96,10 +98,11 @@ Results stream to your terminal with color-coded severity; exit code is `1` when
 | **Baseline diff** | `--baseline-mode diff/update` — report only new findings since the last scan (CI noise reduction) |
 | **Multi-project** | `--multi ./services/...` scans every sub-project in a monorepo in a single run |
 | **Plugin system** | `pkg/plugin.EcosystemPlugin` interface — add new ecosystems without forking argus |
-| **Performance** | Parallel scan workers, parallel embed workers, exponential-backoff retry |
+| **Performance** | Parallel scan workers, parallel embed workers, jittered-backoff retry, per-scan embed cache (deduplicates identical dep@version calls) |
 | **Profiles** | Named scan profiles (`default`, `fast`, `ci`, `thorough`) — bundle flags into a single `--profile` name; define custom profiles in `.argus.yaml` |
 | **Attestation** | `--attest` produces a tamper-evident Ed25519-signed JSON record; `argus verify` validates it anywhere |
-| **Web UI** | `argus serve` launches a local dashboard with live scan history and DB ecosystem stats |
+| **Web UI** | `argus serve` launches a local dashboard with paginated scan history and DB ecosystem stats |
+| **DB management** | `argus db stats/reset/compact` — inspect, clear, or vacuum the DuckDB file without manual SQL |
 | **CI** | `--fail-on` threshold flag, SARIF upload, official GitHub Actions composite action |
 | **CI templates** | Ready-to-use pipeline files for GitLab CI, Azure DevOps, Jenkins, CircleCI, CodeBuild, Cloud Build |
 | **Docker** | Slim image (`ghcr.io/abhishekamralkar/argus`) + bundled image with Ollama included |
@@ -187,10 +190,7 @@ Downloads and embeds all vulnerability databases into a local DuckDB file. Run o
 
 ```bash
 # All standard ecosystems (feeds cached locally after first download)
-argus ingest --ecosystems go,python,rust,npm,maven,nuget
-
-# Including Ruby
-argus ingest --ecosystems go,python,rust,npm,maven,nuget,ruby
+argus ingest --ecosystems go,python,rust,npm,maven,nuget,ruby,php
 
 # Custom database path
 argus ingest --db /var/lib/argus/vulns.db
@@ -211,12 +211,10 @@ argus ingest --no-cache
 
 | Source | Ecosystems |
 |---|---|
-| [OSV](https://osv.dev) | Go, Python, Rust, npm, Maven, NuGet |
+| [OSV](https://osv.dev) | Go, Python, Rust, npm, Maven, NuGet, Ruby, PHP |
 | [Go Vulnerability Database](https://vuln.go.dev) | Go |
 | [RustSec](https://rustsec.org) | Rust |
 | [PyPA](https://github.com/pypa/advisory-database) | Python |
-
-> **Ruby** — `Gemfile.lock` is parsed by the built-in plugin; vulnerability lookup uses the same OSV-based RAG pipeline. A dedicated RubyGems OSV feed can be added via `argus ingest --ecosystems rubygems` once the OSV source is configured.
 
 ---
 
@@ -490,8 +488,32 @@ argus serve --db /var/lib/argus/vulns.db --port 8080
 
 The dashboard shows:
 - Per-ecosystem vulnerability and chunk counts
-- Recent scan history (project, timestamp, finding counts by severity)
+- Paginated scan history (Prev/Next buttons, 20 rows per page) — project, timestamp, finding counts by severity
 - Live DB health status
+
+The `/api/v1/scans` endpoint accepts `?limit=N&offset=M` query parameters for programmatic paging (default: `limit=50`, `offset=0`).
+
+---
+
+### `db` — manage the vulnerability database
+
+Built-in commands for inspecting, clearing, and compacting the DuckDB file — no manual SQL or file-system surgery needed.
+
+```bash
+# Row counts per ecosystem + file size on disk
+argus db stats
+
+# Clear all data but keep the file (re-runs migrations)
+argus db reset
+
+# Delete the .db file entirely
+argus db reset --hard
+
+# Flush the write-ahead log and reclaim space after bulk deletes
+argus db compact
+```
+
+All `db` subcommands accept `--db` to target a custom database path.
 
 ---
 
@@ -544,13 +566,13 @@ Registered plugins (10)
  go            | go.mod                              | built-in
  python        | requirements.txt                    | built-in
  rust          | Cargo.toml                          | built-in
- ruby          | Gemfile.lock                        | built-in
- npm-lock      | package-lock.json                   | built-in
- npm-package   | package.json                        | built-in
  maven         | pom.xml                             | built-in
  nuget-config  | packages.config                     | built-in
+ npm-lock      | package-lock.json                   | built-in
+ npm-package   | package.json                        | built-in
  nuget-csproj  | *.csproj                            | built-in
- php-composer  | composer.lock                       | external
+ ruby          | Gemfile.lock                        | built-in
+ php           | composer.lock                       | built-in
 
 Plugin directory: /home/user/.argus/plugins
 ```
@@ -645,9 +667,9 @@ Build and install:
 go build -buildmode=plugin -o ~/.argus/plugins/php-composer.so plugin.go
 ```
 
-Run `argus plugins list` to confirm the plugin is loaded, then use `argus scan` normally — it will detect `composer.lock` files automatically.
+Run `argus plugins list` to confirm the plugin is loaded, then use `argus scan` normally — it will detect your custom file patterns automatically.
 
-A complete example lives in [`examples/plugins/php/plugin.go`](examples/plugins/php/plugin.go).
+A complete example lives in [`examples/plugins/php/plugin.go`](examples/plugins/php/plugin.go) (note: PHP `composer.lock` is now a built-in — use this template as a starting point for other ecosystems).
 
 ---
 
@@ -661,7 +683,8 @@ A complete example lives in [`examples/plugins/php/plugin.go`](examples/plugins/
 | npm/Node.js | `package-lock.json`, `package.json` | OSV/npm |
 | Maven/Java | `pom.xml` | OSV/Maven |
 | NuGet/.NET | `packages.config`, `*.csproj` | OSV/NuGet |
-| Ruby | `Gemfile.lock` | _(plugin-based; CVE lookup via scan)_ |
+| Ruby | `Gemfile.lock` | OSV/RubyGems |
+| PHP | `composer.lock` | OSV/Packagist |
 
 ---
 
@@ -903,7 +926,7 @@ FROM scan_baseline ORDER BY scanned_at DESC;
 
 ```
 cmd/argus/
-  main.go                       CLI entry point (cobra) — all commands
+  main.go                       CLI entry point (cobra) — all commands incl. argus db
   scan_multi.go                 Multi-project scan logic and aggregated reporting
 internal/
   attest/
@@ -915,40 +938,41 @@ internal/
   color/color.go                Color-coded severity/verdict output
   config/config.go              .argus.yaml loader + validation; Profile struct + built-in profiles
   doctor/doctor.go              Self-diagnostic checks (DB, embed, LLM, config, signing keys)
-  embed/client.go               Embedding client (Ollama + OpenAI-compatible)
+  embed/ollama.go               Embedding client (Ollama + OpenAI-compatible, jittered retry)
   ignore/ignore.go              .argusignore loader
   ingest/
-    osv.go                      OSV feed (Go, PyPI, crates.io, npm, Maven, NuGet)
+    osv.go                      OSV feed (Go, PyPI, crates.io, npm, Maven, NuGet, RubyGems, Packagist)
     govuln.go                   Go Vulnerability Database (CVSS v3 score computation)
     rustsec.go                  RustSec advisory database
     pypa.go                     PyPA advisory database
     chunk.go                    Document chunking (paragraph → sentence → char split)
-  llm/client.go                 LLM client (Ollama + OpenAI-compatible, streaming + retry)
+  llm/ollama.go                 LLM client (Ollama + OpenAI-compatible, streaming, jittered retry)
   output/
     output.go                   JSON and SARIF 2.1.0 report writers (with CVSS fields)
     cyclonedx.go                CycloneDX 1.6 JSON SBOM writer
     spdx.go                     SPDX 2.3 JSON SBOM writer
   parser/
     gomod.go                    go.mod parser
-    requirements.go             requirements.txt parser
-    cargotoml.go                Cargo.toml parser
-    packagejson.go              package.json / package-lock.json parser
+    requirements.go             requirements.txt parser (strips compound version constraints)
+    cargotoml.go                Cargo.toml parser (sorted output)
+    packagejson.go              package.json / package-lock.json parser (sorted output)
     pomxml.go                   Maven pom.xml parser
     csproj.go                   NuGet *.csproj / packages.config parser
     gemfile.go                  Ruby Gemfile.lock parser
-  rag/query.go                  RAG pipeline — embed, retrieve, filter, sort by CVSS, prompt, generate
+    composerlock.go             PHP composer.lock parser
+  rag/query.go                  RAG pipeline — embed (with per-scan cache), retrieve, filter, sort, generate
   store/
-    duckdb.go                   DuckDB vector store — schema, upsert, search, scan_runs table
+    duckdb.go                   DuckDB store — schema, upsert, search, scan_runs, Reset(), Compact()
     baseline.go                 Scan baseline persistence (scan_baseline table)
     types.go                    Shared types: Vulnerability, ScanRun (with severity counts)
   version/compare.go            Semver comparison for version-aware CVE filtering
   web/
-    web.go                      HTTP server — routes for dashboard UI and /api/v1 JSON endpoints
-    assets/index.html           Single-file dark-theme dashboard (vanilla JS, no external deps)
+    web.go                      HTTP server — /api/v1/scans with ?limit&offset pagination
+    assets/index.html           Single-file dark-theme dashboard with Prev/Next scan history
 pkg/plugin/
   plugin.go                     EcosystemPlugin interface + Registry + external plugin loader
-  builtins.go                   Built-in parser registrations (wraps internal/parser)
-examples/plugins/php/plugin.go  Example external plugin (composer.lock; //go:build ignore)
+  builtins.go                   Built-in parser registrations (Go, Python, Rust, npm, Maven, NuGet, Ruby, PHP)
+examples/plugins/php/plugin.go  Example external plugin template (//go:build ignore)
 ci-templates/
   gitlab-ci.yml                 GitLab CI/CD pipeline
   azure-pipelines.yml           Azure DevOps pipeline
