@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -30,6 +31,12 @@ func ParsePackageJSON(path string) ([]Dependency, error) {
 	for name, ver := range manifest.DevDependencies {
 		deps = append(deps, Dependency{Name: name, Version: StripNPMRange(ver), Ecosystem: "npm"})
 	}
+	sort.Slice(deps, func(i, j int) bool {
+		if deps[i].Name != deps[j].Name {
+			return deps[i].Name < deps[j].Name
+		}
+		return deps[i].Version < deps[j].Version
+	})
 	return deps, nil
 }
 
@@ -75,6 +82,12 @@ func ParsePackageLockJSON(path string) ([]Dependency, error) {
 			deps = append(deps, Dependency{Name: name, Version: pkg.Version, Ecosystem: "npm"})
 		}
 	}
+	sort.Slice(deps, func(i, j int) bool {
+		if deps[i].Name != deps[j].Name {
+			return deps[i].Name < deps[j].Name
+		}
+		return deps[i].Version < deps[j].Version
+	})
 	return deps, nil
 }
 
