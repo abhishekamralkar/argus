@@ -485,8 +485,16 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cac
 		sources = []source{
 			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", c, fn) }},
 		}
+	case "ruby":
+		sources = []source{
+			{"OSV/RubyGems", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("RubyGems", c, fn) }},
+		}
+	case "php":
+		sources = []source{
+			{"OSV/Packagist", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Packagist", c, fn) }},
+		}
 	default:
-		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm, maven, nuget)", ecosystem)
+		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm, maven, nuget, ruby, php)", ecosystem)
 	}
 
 	var errs []error

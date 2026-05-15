@@ -20,6 +20,8 @@ var osvEcosystems = map[string]string{
 	"npm":       "npm",
 	"Maven":     "maven",
 	"NuGet":     "nuget",
+	"RubyGems":  "ruby",
+	"Packagist": "php",
 }
 
 // OSV download URLs per ecosystem
@@ -30,6 +32,8 @@ var osvURLs = map[string]string{
 	"npm":       "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip",
 	"Maven":     "https://osv-vulnerabilities.storage.googleapis.com/Maven/all.zip",
 	"NuGet":     "https://osv-vulnerabilities.storage.googleapis.com/NuGet/all.zip",
+	"RubyGems":  "https://osv-vulnerabilities.storage.googleapis.com/RubyGems/all.zip",
+	"Packagist": "https://osv-vulnerabilities.storage.googleapis.com/Packagist/all.zip",
 }
 
 type osvRecord struct {
