@@ -40,10 +40,16 @@ func ParseRequirements(path string) ([]Dependency, error) {
 }
 
 // parseRequirement splits "package==1.2.3" or "package>=1.0" into name + version.
+// For compound constraints like "requests>=2.0,<3.0" only the first version is kept.
 func parseRequirement(s string) (name, version string) {
 	for _, op := range []string{"===", "==", ">=", "<=", "!=", "~=", ">", "<"} {
 		if idx := strings.Index(s, op); idx >= 0 {
-			return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+len(op):])
+			ver := strings.TrimSpace(s[idx+len(op):])
+			// strip trailing compound constraints (e.g. ",<3.0" or " !=1.5")
+			if end := strings.IndexAny(ver, ", "); end >= 0 {
+				ver = ver[:end]
+			}
+			return strings.TrimSpace(s[:idx]), ver
 		}
 	}
 	// no version specifier
