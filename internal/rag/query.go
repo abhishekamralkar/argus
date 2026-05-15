@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/olekukonko/tablewriter"
 
@@ -41,6 +42,8 @@ type Engine struct {
 	embedder  *embed.Client
 	generator *llm.Client
 	cfg       EngineConfig
+	embedMu   sync.Mutex
+	embedMemo map[string][]float32 // keyed by "ecosystem\x00name\x00version"
 }
 
 // NewEngine constructs an Engine. If cfg.SimilarityThreshold is zero the
@@ -57,6 +60,7 @@ func NewEngine(db *store.DB, embedder *embed.Client, generator *llm.Client, cfg 
 		embedder:  embedder,
 		generator: generator,
 		cfg:       cfg,
+		embedMemo: make(map[string][]float32),
 	}
 }
 
@@ -118,10 +122,21 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 	if e.cfg.EnhanceQuery {
 		query = e.enhanceQueryText(ctx, query)
 	}
-	vec, err := e.embedder.Embed(ctx, query)
-	if err != nil {
-		result.Err = fmt.Errorf("embed query: %w", err)
-		return result, nil
+
+	cacheKey := dep.Ecosystem + "\x00" + dep.Name + "\x00" + dep.Version
+	e.embedMu.Lock()
+	vec, cached := e.embedMemo[cacheKey]
+	e.embedMu.Unlock()
+	if !cached {
+		var err error
+		vec, err = e.embedder.Embed(ctx, query)
+		if err != nil {
+			result.Err = fmt.Errorf("embed query: %w", err)
+			return result, nil
+		}
+		e.embedMu.Lock()
+		e.embedMemo[cacheKey] = vec
+		e.embedMu.Unlock()
 	}
 
 	hits, err := e.db.SearchBest(ctx, dep.Ecosystem, vec, e.cfg.TopK, e.cfg.SimilarityThreshold)
