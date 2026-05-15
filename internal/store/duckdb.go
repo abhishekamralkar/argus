@@ -47,6 +47,30 @@ func (s *DB) Close() error {
 	return s.db.Close()
 }
 
+// Reset drops all application tables and re-runs migrations, leaving an empty
+// but fully-initialised database. The file itself is preserved.
+func (s *DB) Reset(ctx context.Context) error {
+	tables := []string{
+		"vulnerability_chunks",
+		"vulnerabilities",
+		"ingest_log",
+		"_meta",
+		"scan_runs",
+	}
+	for _, t := range tables {
+		if _, err := s.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+t); err != nil {
+			return fmt.Errorf("drop %s: %w", t, err)
+		}
+	}
+	return migrate(s.db)
+}
+
+// Compact runs CHECKPOINT to flush the WAL and reclaim space after bulk deletes.
+func (s *DB) Compact(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "CHECKPOINT")
+	return err
+}
+
 // SetMeta stores a key-value pair in the _meta table, overwriting any existing value.
 func (s *DB) SetMeta(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx,
