@@ -549,10 +549,13 @@ func (s *DB) SaveScanRun(ctx context.Context, r ScanRun) error {
 	return err
 }
 
-// ListScanRuns returns the most recent scan runs (newest first), up to limit.
-func (s *DB) ListScanRuns(ctx context.Context, limit int) ([]ScanRun, error) {
+// ListScanRuns returns scan runs newest-first, up to limit rows starting at offset.
+func (s *DB) ListScanRuns(ctx context.Context, limit, offset int) ([]ScanRun, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_dir, scanned_at,
@@ -560,8 +563,8 @@ func (s *DB) ListScanRuns(ctx context.Context, limit int) ([]ScanRun, error) {
 		       critical_count, high_count, medium_count, low_count
 		FROM scan_runs
 		ORDER BY scanned_at DESC
-		LIMIT ?
-	`, limit)
+		LIMIT ? OFFSET ?
+	`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
