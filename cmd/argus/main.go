@@ -110,6 +110,7 @@ func main() {
 	root.AddCommand(doctorCmd(&dbPath))
 	root.AddCommand(pluginsCmd())
 	root.AddCommand(serveCmd(&dbPath))
+	root.AddCommand(dbManageCmd(&dbPath))
 	root.AddCommand(configCmd())
 	root.AddCommand(verifyCmd())
 	root.AddCommand(versionCmd())
@@ -211,6 +212,111 @@ func formatBytes(b int64) string {
 		return fmt.Sprintf("%.1f KB", float64(b)/(1<<10))
 	default:
 		return fmt.Sprintf("%d B", b)
+	}
+}
+
+// ── db management ───────────────────────────────────────────────────────────
+
+func dbManageCmd(dbPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "db",
+		Short: "Manage the vulnerability database file",
+	}
+	cmd.AddCommand(dbStatsCmd(dbPath))
+	cmd.AddCommand(dbResetCmd(dbPath))
+	cmd.AddCommand(dbCompactCmd(dbPath))
+	return cmd
+}
+
+func dbStatsCmd(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stats",
+		Short: "Show row counts and file size",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			rows, err := db.Status(ctx)
+			if err != nil {
+				return fmt.Errorf("status: %w", err)
+			}
+			t := tablewriter.NewWriter(os.Stdout)
+			t.Header("Ecosystem", "Vulnerabilities", "Chunks", "Last Ingest")
+			for _, r := range rows {
+				last := r.LastIngest
+				if last == "" {
+					last = "—"
+				}
+				chunks := fmt.Sprintf("%d", r.ChunkCount)
+				if r.ChunkCount == 0 {
+					chunks = "—"
+				}
+				_ = t.Append([]string{r.Ecosystem, fmt.Sprintf("%d", r.VulnCount), chunks, last})
+			}
+			_ = t.Render()
+
+			if fi, err := os.Stat(*dbPath); err == nil {
+				fmt.Printf("\nFile: %s (%s)\n", *dbPath, formatBytes(fi.Size()))
+			}
+			return nil
+		},
+	}
+}
+
+func dbResetCmd(dbPath *string) *cobra.Command {
+	var hard bool
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Clear all data (keeps file) or delete the database file entirely (--hard)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if hard {
+				fmt.Printf("Deleting %s ...\n", *dbPath)
+				if err := os.Remove(*dbPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("delete db: %w", err)
+				}
+				fmt.Println("Database file deleted.")
+				return nil
+			}
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer func() { _ = db.Close() }()
+			fmt.Printf("Resetting %s ...\n", *dbPath)
+			if err := db.Reset(ctx); err != nil {
+				return fmt.Errorf("reset: %w", err)
+			}
+			fmt.Println("Database reset. All tables cleared and recreated.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&hard, "hard", false, "delete the .db file entirely instead of clearing tables")
+	return cmd
+}
+
+func dbCompactCmd(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "compact",
+		Short: "Run CHECKPOINT to reclaim space after bulk deletes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			db, err := store.Open(*dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer func() { _ = db.Close() }()
+			fmt.Printf("Compacting %s ...\n", *dbPath)
+			if err := db.Compact(ctx); err != nil {
+				return fmt.Errorf("compact: %w", err)
+			}
+			fmt.Println("Done.")
+			return nil
+		},
 	}
 }
 
