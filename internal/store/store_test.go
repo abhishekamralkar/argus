@@ -22,7 +22,7 @@ func openTemp(t *testing.T) *DB {
 	return db
 }
 
-func TestUpsertAndExistsVuln(t *testing.T) {
+func TestUpsertAndExistsChunk(t *testing.T) {
 	db := openTemp(t)
 
 	v := &Vulnerability{
@@ -38,12 +38,12 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 	}
 
 	// No chunks yet
-	exists, err := db.ExistsVuln(bg, v.ID)
+	exists, err := db.ExistsChunk(bg, v.ID)
 	if err != nil {
-		t.Fatalf("ExistsVuln: %v", err)
+		t.Fatalf("ExistsChunk: %v", err)
 	}
 	if exists {
-		t.Error("ExistsVuln should be false before any chunks are inserted")
+		t.Error("ExistsChunk should be false before any chunks are inserted")
 	}
 
 	chunk := ChunkItem{
@@ -56,12 +56,12 @@ func TestUpsertAndExistsVuln(t *testing.T) {
 		t.Fatalf("UpsertChunkBatch: %v", err)
 	}
 
-	exists, err = db.ExistsVuln(bg, v.ID)
+	exists, err = db.ExistsChunk(bg, v.ID)
 	if err != nil {
-		t.Fatalf("ExistsVuln after insert: %v", err)
+		t.Fatalf("ExistsChunk after insert: %v", err)
 	}
 	if !exists {
-		t.Error("ExistsVuln should be true after chunk insert")
+		t.Error("ExistsChunk should be true after chunk insert")
 	}
 }
 

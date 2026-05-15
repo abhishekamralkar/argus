@@ -661,7 +661,7 @@ func ingestSourceChunked(
 
 	err := loader(func(v *store.Vulnerability) error {
 		if skipExisting {
-			exists, err := db.ExistsVuln(ctx, v.ID)
+			exists, err := db.Exists(ctx, v.ID)
 			if err != nil {
 				return err
 			}
