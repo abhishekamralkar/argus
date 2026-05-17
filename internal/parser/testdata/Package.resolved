@@ -1,0 +1,23 @@
+{
+  "pins": [
+    {
+      "identity": "alamofire",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/Alamofire/Alamofire.git",
+      "state": {
+        "revision": "a8a74",
+        "version": "5.6.4"
+      }
+    },
+    {
+      "identity": "swift-algorithms",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/apple/swift-algorithms.git",
+      "state": {
+        "revision": "b3c6f",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "version": 2
+}
