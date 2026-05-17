@@ -14,6 +14,9 @@ func builtins() []EcosystemPlugin {
 	return []EcosystemPlugin{
 		simpleParser{name: "go", patterns: []string{"go.mod"}, fn: wrap(parser.ParseGoMod)},
 		simpleParser{name: "python", patterns: []string{"requirements.txt"}, fn: wrap(parser.ParseRequirements)},
+		simpleParser{name: "python-poetry", patterns: []string{"poetry.lock"}, fn: wrap(parser.ParsePoetryLock)},
+		simpleParser{name: "python-uv", patterns: []string{"uv.lock"}, fn: wrap(parser.ParseUVLock)},
+		simpleParser{name: "python-pipfile", patterns: []string{"Pipfile.lock"}, fn: wrap(parser.ParsePipfileLock)},
 		simpleParser{name: "rust", patterns: []string{"Cargo.toml"}, fn: wrap(parser.ParseCargoToml)},
 		simpleParser{name: "maven", patterns: []string{"pom.xml"}, fn: wrap(parser.ParsePomXML)},
 		simpleParser{name: "nuget-config", patterns: []string{"packages.config"}, fn: wrap(parser.ParsePackagesConfig)},
