@@ -25,6 +25,9 @@ func builtins() []EcosystemPlugin {
 		csprojPlugin{},
 		simpleParser{name: "ruby", patterns: []string{"Gemfile.lock"}, fn: wrap(parser.ParseGemfileLock)},
 		simpleParser{name: "php", patterns: []string{"composer.lock"}, fn: wrap(parser.ParseComposerLock)},
+		simpleParser{name: "swift-cocoapods", patterns: []string{"Podfile.lock"}, fn: wrap(parser.ParsePodfileLock)},
+		simpleParser{name: "swift-spm", patterns: []string{"Package.resolved"}, fn: wrap(parser.ParsePackageResolved)},
+		simpleParser{name: "dart", patterns: []string{"pubspec.lock"}, fn: wrap(parser.ParsePubspecLock)},
 	}
 }
 
