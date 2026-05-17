@@ -146,3 +146,4 @@ help:
 	@echo "    DIR                       Project directory for 'make scan'"
 	@echo "    Q                         Query string for 'make search'"
 	@echo ""
+
