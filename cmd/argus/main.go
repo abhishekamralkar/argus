@@ -836,6 +836,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var multi bool
 	var verbose bool
 	var fixesOnly bool
+	var fixHint bool
 	var profileName string
 	var doAttest bool
 	var attestOut string
@@ -1068,6 +1069,9 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return output.WriteSPDX(os.Stdout, results, filepath.Base(projectDir))
 			default:
 				printSummaryTable(results, verbose)
+				if fixHint {
+					printFixHints(results)
+				}
 			}
 
 			for _, r := range results {
@@ -1090,6 +1094,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().Float64Var(&minCVSS, "min-cvss", 0, "minimum CVSS v3 base score to report (0 = report all)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "show per-dependency analysis and CVSS scores in summary table")
 	cmd.Flags().BoolVar(&fixesOnly, "fixes-only", false, "only report packages that have at least one finding with a known fix version")
+	cmd.Flags().BoolVar(&fixHint, "fix-hint", false, "print a fix hints section listing recommended upgrades after the summary table")
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "scan timeout in minutes (0 = no timeout)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", store.DefaultSimilarityThreshold, "cosine similarity cutoff for vector search (0–1); raise to reduce false positives")
 	cmd.Flags().IntVar(&topK, "top-k", 0, "number of vector search candidates per dependency (default 10; 0 = use default)")
@@ -1704,6 +1709,52 @@ func printSummaryTable(results []rag.Result, verbose bool) {
 		}
 	}
 	_ = t.Render()
+}
+
+// printFixHints prints a "FIX HINTS" section listing the recommended upgrade
+// for each vulnerable dependency that has at least one advisory with a known
+// fixed version. Packages with no known fix are listed with "no fix available".
+func printFixHints(results []rag.Result) {
+	type hint struct {
+		dep    string
+		fix    string
+		cveIDs []string
+	}
+	var hints []hint
+	for _, r := range results {
+		if r.RetrievedCount == 0 || r.Err != nil {
+			continue
+		}
+		var cves []string
+		fix := ""
+		for _, f := range r.Findings {
+			cves = append(cves, f.ID)
+			if fix == "" && f.FixedIn != "" {
+				fix = f.FixedIn
+			}
+		}
+		if len(cves) == 0 {
+			continue
+		}
+		dep := fmt.Sprintf("%s@%s", r.Dep.Name, r.Dep.Version)
+		hints = append(hints, hint{dep: dep, fix: fix, cveIDs: cves})
+	}
+	if len(hints) == 0 {
+		return
+	}
+	fmt.Printf("\n%s\n\n", col.Bold("FIX HINTS"))
+	for _, h := range hints {
+		ids := strings.Join(h.cveIDs, ", ")
+		if len(ids) > 60 {
+			ids = ids[:57] + "..."
+		}
+		if h.fix != "" {
+			fmt.Printf("  %-40s → upgrade to %s  (%s)\n", h.dep, h.fix, ids)
+		} else {
+			fmt.Printf("  %-40s → no fix available  (%s)\n", h.dep, ids)
+		}
+	}
+	fmt.Println()
 }
 
 func truncatePath(s string, maxLen int) string {
