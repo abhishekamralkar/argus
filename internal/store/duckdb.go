@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	_ "github.com/marcboeker/go-duckdb"
 )
@@ -153,11 +154,17 @@ func migrate(db *sql.DB) error {
 }
 
 // buildVulnContent constructs the text content for a vulnerability, truncated
-// to 4000 characters. Shared by Upsert, UpsertBatch, and UpsertVulnMeta.
+// to 4000 bytes. Shared by Upsert, UpsertBatch, and UpsertVulnMeta.
 func buildVulnContent(v *Vulnerability) string {
 	content := v.Summary + "\n" + v.Details
 	if len(content) > 4000 {
-		content = content[:4000]
+		i := 4000
+		// Walk back to a valid UTF-8 rune boundary so we never produce an
+		// invalid byte sequence (multi-byte runes would cause DuckDB bind errors).
+		for i > 0 && !utf8.RuneStart(content[i]) {
+			i--
+		}
+		content = content[:i]
 	}
 	return content
 }

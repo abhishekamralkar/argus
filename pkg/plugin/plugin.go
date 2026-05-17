@@ -38,6 +38,7 @@ type Dependency struct {
 	Name      string
 	Version   string
 	Ecosystem string
+	Direct    bool // true = declared in the project manifest (not a transitive dep)
 }
 
 // EcosystemPlugin is the interface all ecosystem parsers must implement.

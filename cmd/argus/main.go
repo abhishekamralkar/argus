@@ -846,6 +846,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	var profileName string
 	var doAttest bool
 	var attestOut string
+	var directOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "scan [flags] <project-dir>",
@@ -1006,6 +1007,20 @@ func scanCmd(dbPath *string) *cobra.Command {
 				return nil
 			}
 
+			if directOnly {
+				filtered := deps[:0]
+				for _, d := range deps {
+					if d.Direct {
+						filtered = append(filtered, d)
+					}
+				}
+				deps = filtered
+				if len(deps) == 0 {
+					fmt.Println("No direct dependencies found (--direct-only is set).")
+					return nil
+				}
+			}
+
 			isText := outputFmt == "text"
 
 			if isText {
@@ -1109,6 +1124,7 @@ func scanCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&profileName, "profile", "", "named scan profile from .argus.yaml or built-in (default, fast, ci, thorough)")
 	cmd.Flags().BoolVar(&doAttest, "attest", false, "build and sign a scan attestation (keys auto-generated in ~/.argus/keys)")
 	cmd.Flags().StringVar(&attestOut, "attestation-out", "", "path to write the attestation JSON (default: argus-attestation.json)")
+	cmd.Flags().BoolVar(&directOnly, "direct-only", false, "scan only direct dependencies (skip transitive deps; requires parsers that distinguish them)")
 	return cmd
 }
 
@@ -1154,8 +1170,12 @@ func parallelScan(ctx context.Context, engine *rag.Engine, deps []parser.Depende
 		wg.Go(func() {
 			for work := range depCh {
 				if verbose {
-					fmt.Printf("┌─ [%d/%d] %s @ %s (%s)\n",
-						work.i+1, len(deps), work.dep.Name, work.dep.Version, work.dep.Ecosystem)
+					depKind := "transitive"
+					if work.dep.Direct {
+						depKind = "direct"
+					}
+					fmt.Printf("┌─ [%d/%d] %s @ %s (%s, %s)\n",
+						work.i+1, len(deps), work.dep.Name, work.dep.Version, work.dep.Ecosystem, depKind)
 				}
 				r, err := engine.AnalyzeDependency(ctx, work.dep, os.Stdout)
 				if err != nil {
@@ -1196,7 +1216,7 @@ func detectAndParse(dir string) ([]parser.Dependency, error) {
 	}
 	deps := make([]parser.Dependency, len(pluginDeps))
 	for i, d := range pluginDeps {
-		deps[i] = parser.Dependency{Name: d.Name, Version: d.Version, Ecosystem: d.Ecosystem}
+		deps[i] = parser.Dependency{Name: d.Name, Version: d.Version, Ecosystem: d.Ecosystem, Direct: d.Direct}
 	}
 	return deps, nil
 }
