@@ -47,6 +47,7 @@ func ParseCargoToml(path string) ([]Dependency, error) {
 			Name:      name,
 			Version:   dep.Version,
 			Ecosystem: "rust",
+			Direct:    true,
 		})
 	}
 	for name, dep := range manifest.DevDependencies {
@@ -54,6 +55,7 @@ func ParseCargoToml(path string) ([]Dependency, error) {
 			Name:      name,
 			Version:   dep.Version,
 			Ecosystem: "rust",
+			Direct:    true,
 		})
 	}
 	sort.Slice(deps, func(i, j int) bool {

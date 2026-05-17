@@ -43,6 +43,8 @@ func ParsePackageJSON(path string) ([]Dependency, error) {
 // ParsePackageLockJSON parses a package-lock.json (v1, v2, or v3) and returns
 // exact resolved versions for all packages. Lock file versions are preferred
 // over package.json ranges because they represent the version actually installed.
+// For v2/v3 format, packages listed in the root entry's dependencies or
+// devDependencies are marked Direct: true.
 func ParsePackageLockJSON(path string) ([]Dependency, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -51,10 +53,12 @@ func ParsePackageLockJSON(path string) ([]Dependency, error) {
 
 	var lock struct {
 		LockfileVersion int `json:"lockfileVersion"`
-		// v2/v3: flat "packages" map keyed "node_modules/<name>"
+		// v2/v3: flat "packages" map keyed "" (root) or "node_modules/<name>"
 		Packages map[string]struct {
-			Version string `json:"version"`
-			Dev     bool   `json:"dev"`
+			Version         string            `json:"version"`
+			Dev             bool              `json:"dev"`
+			Dependencies    map[string]string `json:"dependencies"`
+			DevDependencies map[string]string `json:"devDependencies"`
 		} `json:"packages"`
 		// v1: nested "dependencies" map
 		Dependencies map[string]struct {
@@ -67,12 +71,27 @@ func ParsePackageLockJSON(path string) ([]Dependency, error) {
 
 	var deps []Dependency
 	if lock.LockfileVersion >= 2 {
+		// Collect direct dep names from the root "" entry.
+		directNames := map[string]bool{}
+		if root, ok := lock.Packages[""]; ok {
+			for name := range root.Dependencies {
+				directNames[name] = true
+			}
+			for name := range root.DevDependencies {
+				directNames[name] = true
+			}
+		}
 		for key, pkg := range lock.Packages {
 			name, ok := strings.CutPrefix(key, "node_modules/")
 			if !ok || name == "" || pkg.Version == "" {
 				continue
 			}
-			deps = append(deps, Dependency{Name: name, Version: pkg.Version, Ecosystem: "npm"})
+			deps = append(deps, Dependency{
+				Name:      name,
+				Version:   pkg.Version,
+				Ecosystem: "npm",
+				Direct:    directNames[name],
+			})
 		}
 	} else {
 		for name, pkg := range lock.Dependencies {

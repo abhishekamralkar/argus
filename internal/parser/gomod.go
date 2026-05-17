@@ -31,14 +31,15 @@ func ParseGoMod(path string) ([]Dependency, error) {
 		}
 
 		// single-line require
-		if strings.HasPrefix(line, "require ") {
-			line = strings.TrimPrefix(line, "require ")
+		if rest, ok := strings.CutPrefix(line, "require "); ok {
+			line = rest
 			inRequire = false
 		} else if !inRequire {
 			continue
 		}
 
-		// strip inline comment
+		// detect // indirect before stripping the comment
+		indirect := strings.Contains(line, "// indirect")
 		if idx := strings.Index(line, "//"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
@@ -50,6 +51,7 @@ func ParseGoMod(path string) ([]Dependency, error) {
 			Name:      parts[0],
 			Version:   strings.TrimPrefix(parts[1], "v"),
 			Ecosystem: "go",
+			Direct:    !indirect,
 		})
 	}
 	return deps, scanner.Err()
