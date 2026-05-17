@@ -498,6 +498,28 @@ func TestListScanRuns_Limit(t *testing.T) {
 	}
 }
 
+// TestBuildVulnContentUTF8Boundary guards against truncating advisory content
+// mid-rune, which produces invalid UTF-8 and causes DuckDB to reject the bind
+// parameter (regression for GHSA-25rp-h46x-2hjm, whose details contain em-dashes
+// that straddle the 4000-byte boundary).
+func TestBuildVulnContentUTF8Boundary(t *testing.T) {
+	db := openTemp(t)
+
+	// 3998 ASCII bytes + em-dash (U+2014, 3 bytes) → rune starts at byte 3998,
+	// so a naive [:4000] slice lands inside it and produces invalid UTF-8.
+	prefix := fmt.Sprintf("%03998d", 0)
+	v := &Vulnerability{
+		ID:        "TEST-MULTIBYTE-0001",
+		Ecosystem: "go",
+		Package:   "example.com/pkg",
+		Summary:   prefix + "—— trailing em-dashes",
+		Severity:  "CRITICAL",
+	}
+	if err := db.UpsertVulnMeta(bg, v); err != nil {
+		t.Fatalf("UpsertVulnMeta with multi-byte boundary content: %v", err)
+	}
+}
+
 func testTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts, err := time.Parse(time.RFC3339, s)
