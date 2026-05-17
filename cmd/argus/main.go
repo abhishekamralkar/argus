@@ -669,11 +669,11 @@ func ingestSourceWhole(
 		writerDone <- nil
 	}()
 
-	err := loader(func(v *store.Vulnerability) error {
+	loaderErr := loader(func(v *store.Vulnerability) error {
 		if skipExisting {
 			exists, err := db.Exists(ctx, v.ID)
 			if err != nil {
-				return err
+				return fmt.Errorf("ingest %s: check existing %s: %w", name, v.ID, err)
 			}
 			if exists {
 				return nil
@@ -689,7 +689,10 @@ func ingestSourceWhole(
 		fmt.Printf("  %s: %d entries skipped due to errors\n", name, n)
 	}
 	_ = db.TouchIngestLog(ctx, name)
-	return err
+	if loaderErr != nil {
+		return fmt.Errorf("ingest %s: %w", name, loaderErr)
+	}
+	return nil
 }
 
 func ingestSourceChunked(
@@ -773,11 +776,11 @@ func ingestSourceChunked(
 		writerDone <- nil
 	}()
 
-	err := loader(func(v *store.Vulnerability) error {
+	loaderErr := loader(func(v *store.Vulnerability) error {
 		if skipExisting {
 			exists, err := db.Exists(ctx, v.ID)
 			if err != nil {
-				return err
+				return fmt.Errorf("ingest %s: check existing %s: %w", name, v.ID, err)
 			}
 			if exists {
 				return nil
@@ -811,7 +814,10 @@ func ingestSourceChunked(
 		fmt.Printf("  %s: %d chunks skipped due to errors\n", name, n)
 	}
 	_ = db.TouchIngestLog(ctx, name)
-	return err
+	if loaderErr != nil {
+		return fmt.Errorf("ingest %s: %w", name, loaderErr)
+	}
+	return nil
 }
 
 // ── scan ─────────────────────────────────────────────────────────────────────

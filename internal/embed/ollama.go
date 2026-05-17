@@ -142,8 +142,9 @@ func NewClientWithConfig(cfg Config) *Client {
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	text = safeTruncate(text, maxTextBytes)
 
+	const maxAttempts = 3
 	var lastErr error
-	for attempt := range 3 {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			base := time.Duration(attempt) * 2 * time.Second
 			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
@@ -165,7 +166,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("embed: failed after %d retries: %w", maxAttempts, lastErr)
 }
 
 // Model returns the embedding model name configured for this client.
@@ -194,8 +195,9 @@ func (c *Client) BatchEmbed(ctx context.Context, texts []string) ([][]float32, e
 	for i, t := range texts {
 		texts[i] = safeTruncate(t, maxTextBytes)
 	}
+	const maxAttempts = 3
 	var lastErr error
-	for attempt := range 3 {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			base := time.Duration(attempt) * 2 * time.Second
 			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
@@ -217,7 +219,7 @@ func (c *Client) BatchEmbed(ctx context.Context, texts []string) ([][]float32, e
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("batch embed: failed after %d retries: %w", maxAttempts, lastErr)
 }
 
 // ── Ollama format ────────────────────────────────────────────────────────────
