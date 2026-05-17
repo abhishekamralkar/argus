@@ -132,8 +132,9 @@ func NewClientWithConfig(cfg Config) *Client {
 // It retries on transient errors (network failures, 429, 5xx) but returns
 // immediately on permanent errors (401, 400, 404, etc.).
 func (c *Client) Generate(ctx context.Context, prompt string, out io.Writer) error {
+	const maxAttempts = 3
 	var lastErr error
-	for attempt := range 3 {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			base := time.Duration(attempt*attempt) * 2 * time.Second
 			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
@@ -152,7 +153,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, out io.Writer) err
 		}
 		lastErr = err
 	}
-	return lastErr
+	return fmt.Errorf("llm generate: failed after %d retries: %w", maxAttempts, lastErr)
 }
 
 // ── Ollama format ────────────────────────────────────────────────────────────
