@@ -968,8 +968,35 @@ func scanCmd(dbPath *string) *cobra.Command {
 			}
 			defer func() { _ = db.Close() }()
 
-			embedder := embed.NewClientWithConfig(embed.Config{Model: embedModel, BaseURL: embedBaseURL})
-			generator := llm.NewClientWithConfig(llm.Config{Model: llmModel, BaseURL: llmBaseURL})
+			// When azure provider is configured, use azure_endpoint as base URL
+			// if no explicit --embed-base-url / --llm-base-url was given.
+			resolvedEmbedURL := embedBaseURL
+			if resolvedEmbedURL == "" && cfg.ResolveEmbedProvider() == "azure" {
+				resolvedEmbedURL = cfg.AzureEndpoint
+			}
+			resolvedLLMURL := llmBaseURL
+			if resolvedLLMURL == "" && cfg.ResolveLLMProvider() == "azure" {
+				resolvedLLMURL = cfg.AzureEndpoint
+			}
+
+			embedder := embed.NewClientWithConfig(embed.Config{
+				Model:           embedModel,
+				BaseURL:         resolvedEmbedURL,
+				Provider:        cfg.ResolveEmbedProvider(),
+				AzureAPIVersion: cfg.AzureAPIVersion,
+				AWSRegion:       cfg.AWSRegion,
+				GCPProject:      cfg.GCPProject,
+				GCPLocation:     cfg.GCPLocation,
+			})
+			generator := llm.NewClientWithConfig(llm.Config{
+				Model:           llmModel,
+				BaseURL:         resolvedLLMURL,
+				Provider:        cfg.ResolveLLMProvider(),
+				AzureAPIVersion: cfg.AzureAPIVersion,
+				AWSRegion:       cfg.AWSRegion,
+				GCPProject:      cfg.GCPProject,
+				GCPLocation:     cfg.GCPLocation,
+			})
 
 			if err := checkEmbedCompatibility(ctx, db, embedder); err != nil {
 				return err
@@ -1530,13 +1557,21 @@ func doctorCmd(dbPath *string) *cobra.Command {
 		Short: "Validate Argus setup: config, database, and LLM connectivity",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			argusConfig, _ := config.Load(projectDir)
 			cfg := doctor.Config{
-				DBPath:       *dbPath,
-				ProjectDir:   projectDir,
-				LLMModel:     llmModel,
-				EmbedModel:   embedModel,
-				LLMBaseURL:   llmBaseURL,
-				EmbedBaseURL: embedBaseURL,
+				DBPath:          *dbPath,
+				ProjectDir:      projectDir,
+				LLMModel:        llmModel,
+				EmbedModel:      embedModel,
+				LLMBaseURL:      llmBaseURL,
+				EmbedBaseURL:    embedBaseURL,
+				Provider:        argusConfig.Provider,
+				LLMProvider:     argusConfig.ResolveLLMProvider(),
+				AzureEndpoint:   argusConfig.AzureEndpoint,
+				AzureAPIVersion: argusConfig.AzureAPIVersion,
+				AWSRegion:       argusConfig.AWSRegion,
+				GCPProject:      argusConfig.GCPProject,
+				GCPLocation:     argusConfig.GCPLocation,
 			}
 			checks := doctor.Run(ctx, cfg)
 

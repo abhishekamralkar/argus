@@ -72,12 +72,31 @@ type Config struct {
 	EmbedBaseURL   string             `yaml:"embed_base_url"`
 	DefaultProfile string             `yaml:"default_profile"`
 	Profiles       map[string]Profile `yaml:"profiles"`
+
+	// Provider selects the LLM and embedding backend.
+	// Valid values: ollama, openai, azure, bedrock, vertex
+	// Applies to both LLM and embeddings unless overridden by LLMProvider/EmbedProvider.
+	Provider      string `yaml:"provider"`
+	LLMProvider   string `yaml:"llm_provider"`   // overrides Provider for LLM
+	EmbedProvider string `yaml:"embed_provider"` // overrides Provider for embeddings
+
+	// Azure OpenAI
+	AzureEndpoint   string `yaml:"azure_endpoint"`
+	AzureAPIVersion string `yaml:"azure_api_version"`
+
+	// AWS Bedrock
+	AWSRegion string `yaml:"aws_region"`
+
+	// GCP Vertex AI
+	GCPProject  string `yaml:"gcp_project"`
+	GCPLocation string `yaml:"gcp_location"`
 }
 
 var validSeverities = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
 var validEcosystems = map[string]bool{"go": true, "python": true, "rust": true, "npm": true, "maven": true, "nuget": true}
 var validOutputFormats = map[string]bool{"": true, "text": true, "json": true, "sarif": true, "cyclonedx": true, "spdx": true}
 var validFailOns = map[string]bool{"": true, "LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
+var validProviders = map[string]bool{"": true, "ollama": true, "openai": true, "azure": true, "bedrock": true, "vertex": true}
 
 // Validate checks field bounds and known enum values.
 func (c *Config) Validate() error {
@@ -107,6 +126,11 @@ func (c *Config) Validate() error {
 	if c.TopK < 0 {
 		return fmt.Errorf("top_k must be >= 0, got %d", c.TopK)
 	}
+	for _, p := range []string{c.Provider, c.LLMProvider, c.EmbedProvider} {
+		if !validProviders[strings.ToLower(p)] {
+			return fmt.Errorf("provider must be one of ollama, openai, azure, bedrock, vertex (got %q)", p)
+		}
+	}
 	for name, p := range c.Profiles {
 		if err := p.validate(); err != nil {
 			return fmt.Errorf("profile %q: %w", name, err)
@@ -135,6 +159,30 @@ func (p *Profile) validate() error {
 		return fmt.Errorf("output must be one of text, json, sarif, cyclonedx, spdx (got %q)", p.OutputFormat)
 	}
 	return nil
+}
+
+// ResolveLLMProvider returns the effective provider for LLM calls.
+// LLMProvider takes precedence over the shared Provider field.
+func (c *Config) ResolveLLMProvider() string {
+	if c == nil {
+		return ""
+	}
+	if c.LLMProvider != "" {
+		return strings.ToLower(c.LLMProvider)
+	}
+	return strings.ToLower(c.Provider)
+}
+
+// ResolveEmbedProvider returns the effective provider for embedding calls.
+// EmbedProvider takes precedence over the shared Provider field.
+func (c *Config) ResolveEmbedProvider() string {
+	if c == nil {
+		return ""
+	}
+	if c.EmbedProvider != "" {
+		return strings.ToLower(c.EmbedProvider)
+	}
+	return strings.ToLower(c.Provider)
 }
 
 // ResolveProfile looks up a profile by name. User-defined profiles in the
