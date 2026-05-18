@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,8 +13,8 @@ import (
 // passes match. Pass a non-nil cache to enable ETag/Last-Modified caching.
 // Errors opening or reading individual entries are logged and skipped; fn
 // returning a non-nil error stops iteration and is returned.
-func loadFromZip(url string, c *cache.Cache, match func(string) bool, fn func(name string, data []byte) error) error {
-	zr, err := fetchZip(url, c)
+func loadFromZip(ctx context.Context, url string, c *cache.Cache, match func(string) bool, fn func(name string, data []byte) error) error {
+	zr, err := fetchZip(ctx, url, c)
 	if err != nil {
 		return err
 	}
@@ -26,7 +27,7 @@ func loadFromZip(url string, c *cache.Cache, match func(string) bool, fn func(na
 			fmt.Fprintf(os.Stderr, "  skip %s: open: %v\n", f.Name, err)
 			continue
 		}
-		data, err := io.ReadAll(rc)
+		data, err := io.ReadAll(io.LimitReader(rc, 10<<20))
 		_ = rc.Close()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  skip %s: read: %v\n", f.Name, err)

@@ -3,6 +3,7 @@ package cache_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -49,7 +50,7 @@ func TestDownloadZip_FreshDownload(t *testing.T) {
 	defer srv.Close()
 
 	c := newCache(t)
-	zr, err := c.DownloadZip(srv.URL)
+	zr, err := c.DownloadZip(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("DownloadZip: %v", err)
 	}
@@ -75,11 +76,11 @@ func TestDownloadZip_304NotModified(t *testing.T) {
 
 	c := newCache(t)
 	// First request — download and cache.
-	if _, err := c.DownloadZip(srv.URL); err != nil {
+	if _, err := c.DownloadZip(context.Background(), srv.URL); err != nil {
 		t.Fatalf("first download: %v", err)
 	}
 	// Second request — server returns 304; must serve from disk.
-	zr, err := c.DownloadZip(srv.URL)
+	zr, err := c.DownloadZip(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("second download: %v", err)
 	}
@@ -99,13 +100,13 @@ func TestDownloadZip_NetworkErrorFallback(t *testing.T) {
 	}))
 	c := newCache(t)
 	// Seed the cache.
-	if _, err := c.DownloadZip(srv.URL); err != nil {
+	if _, err := c.DownloadZip(context.Background(), srv.URL); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	srv.Close() // take server offline
 
 	// Must fall back to on-disk cache.
-	zr, err := c.DownloadZip(srv.URL)
+	zr, err := c.DownloadZip(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("fallback: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestDownloadZip_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := newCache(t)
-	_, err := c.DownloadZip(srv.URL)
+	_, err := c.DownloadZip(context.Background(), srv.URL)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
 	}
@@ -136,7 +137,7 @@ func TestCache_Size(t *testing.T) {
 	defer srv.Close()
 
 	c := newCache(t)
-	if _, err := c.DownloadZip(srv.URL); err != nil {
+	if _, err := c.DownloadZip(context.Background(), srv.URL); err != nil {
 		t.Fatal(err)
 	}
 	size, err := c.Size()
@@ -187,10 +188,10 @@ func TestDownloadZip_LastModifiedConditional(t *testing.T) {
 	defer srv.Close()
 
 	c := newCache(t)
-	if _, err := c.DownloadZip(srv.URL); err != nil {
+	if _, err := c.DownloadZip(context.Background(), srv.URL); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	zr, err := c.DownloadZip(srv.URL)
+	zr, err := c.DownloadZip(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}

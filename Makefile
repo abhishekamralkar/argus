@@ -6,7 +6,7 @@ OLLAMA_HOST ?= http://localhost:11434
 VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS    := -ldflags "-X main.Version=$(VERSION)"
 
-.PHONY: all build install clean test lint vet fmt release \
+.PHONY: all build install clean test test-verbose test-short lint vet fmt release \
         ingest ingest-go ingest-python ingest-rust \
         scan scan-json scan-sarif search db-shell db-count db-clean help
 
@@ -29,7 +29,10 @@ clean:
 # ── test / quality ────────────────────────────────────────────────────────────
 
 test:
-	go test ./... -v
+	go test -race -timeout 120s ./...
+
+test-verbose:
+	go test -race -timeout 120s -v ./...
 
 test-short:
 	go test ./... -short
@@ -114,7 +117,8 @@ help:
 	@echo "    make clean            Remove binary and database"
 	@echo ""
 	@echo "  Test / Quality"
-	@echo "    make test             Run all tests"
+	@echo "    make test             Run all tests with race detector"
+	@echo "    make test-verbose     Run all tests with verbose output"
 	@echo "    make test-short       Run tests with -short flag"
 	@echo "    make vet              Run go vet"
 	@echo "    make fmt              Run gofmt"

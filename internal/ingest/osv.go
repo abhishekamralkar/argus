@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -122,7 +123,7 @@ func (r *osvRecord) toVuln(ecosystem string) *store.Vulnerability {
 // LoadOSV downloads the OSV zip for the given ecosystem (e.g. "Go", "PyPI", "crates.io")
 // and calls fn for each parsed vulnerability. Pass a non-nil cache to enable
 // ETag/Last-Modified caching of the downloaded zip.
-func LoadOSV(osvEco string, c *cache.Cache, fn func(*store.Vulnerability) error) error {
+func LoadOSV(ctx context.Context, osvEco string, c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	eco, ok := osvEcosystems[osvEco]
 	if !ok {
 		return fmt.Errorf("unknown OSV ecosystem: %s", osvEco)
@@ -133,7 +134,7 @@ func LoadOSV(osvEco string, c *cache.Cache, fn func(*store.Vulnerability) error)
 	}
 
 	return loadFromZip(
-		url, c,
+		ctx, url, c,
 		func(name string) bool {
 			return strings.HasSuffix(name, ".json")
 		},
