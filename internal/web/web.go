@@ -104,6 +104,9 @@ func Serve(cfg Config) error {
 		offset := 0
 		if v := r.URL.Query().Get("limit"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				if n > 1000 {
+					n = 1000
+				}
 				limit = n
 			}
 		}

@@ -460,38 +460,38 @@ func runIngest(ctx context.Context, db *store.DB, embedder *embed.Client, c *cac
 	switch ecosystem {
 	case "go":
 		sources = []source{
-			{"OSV/Go", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Go", c, fn) }},
-			{"GoVulnDB", func(fn func(*store.Vulnerability) error) error { return ingest.LoadGoVulnDB(c, fn) }},
+			{"OSV/Go", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "Go", c, fn) }},
+			{"GoVulnDB", func(fn func(*store.Vulnerability) error) error { return ingest.LoadGoVulnDB(ctx, c, fn) }},
 		}
 	case "python":
 		sources = []source{
-			{"OSV/PyPI", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("PyPI", c, fn) }},
-			{"PyPA", func(fn func(*store.Vulnerability) error) error { return ingest.LoadPyPA(c, fn) }},
+			{"OSV/PyPI", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "PyPI", c, fn) }},
+			{"PyPA", func(fn func(*store.Vulnerability) error) error { return ingest.LoadPyPA(ctx, c, fn) }},
 		}
 	case "rust":
 		sources = []source{
-			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("crates.io", c, fn) }},
-			{"RustSec", func(fn func(*store.Vulnerability) error) error { return ingest.LoadRustSec(c, fn) }},
+			{"OSV/crates.io", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "crates.io", c, fn) }},
+			{"RustSec", func(fn func(*store.Vulnerability) error) error { return ingest.LoadRustSec(ctx, c, fn) }},
 		}
 	case "npm":
 		sources = []source{
-			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("npm", c, fn) }},
+			{"OSV/npm", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "npm", c, fn) }},
 		}
 	case "maven":
 		sources = []source{
-			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Maven", c, fn) }},
+			{"OSV/Maven", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "Maven", c, fn) }},
 		}
 	case "nuget":
 		sources = []source{
-			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("NuGet", c, fn) }},
+			{"OSV/NuGet", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "NuGet", c, fn) }},
 		}
 	case "ruby":
 		sources = []source{
-			{"OSV/RubyGems", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("RubyGems", c, fn) }},
+			{"OSV/RubyGems", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "RubyGems", c, fn) }},
 		}
 	case "php":
 		sources = []source{
-			{"OSV/Packagist", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV("Packagist", c, fn) }},
+			{"OSV/Packagist", func(fn func(*store.Vulnerability) error) error { return ingest.LoadOSV(ctx, "Packagist", c, fn) }},
 		}
 	default:
 		return fmt.Errorf("unknown ecosystem: %s (valid: go, python, rust, npm, maven, nuget, ruby, php)", ecosystem)
@@ -614,6 +614,11 @@ func ingestSourceWhole(
 	var wg sync.WaitGroup
 	for range numWorkers {
 		wg.Go(func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("embed worker panic", "source", name, "panic", r)
+				}
+			}()
 			pending := make([]*store.Vulnerability, 0, embedBatchSize)
 			flush := func() {
 				texts := make([]string, len(pending))
@@ -713,6 +718,11 @@ func ingestSourceChunked(
 	var wg sync.WaitGroup
 	for range numWorkers {
 		wg.Go(func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("chunk embed worker panic", "source", name, "panic", r)
+				}
+			}()
 			pending := make([]chunkWork, 0, embedBatchSize)
 			flush := func() {
 				texts := make([]string, len(pending))
@@ -1169,6 +1179,9 @@ func parallelScan(ctx context.Context, engine *rag.Engine, deps []parser.Depende
 	for range workers {
 		wg.Go(func() {
 			for work := range depCh {
+				if ctx.Err() != nil {
+					return
+				}
 				if verbose {
 					depKind := "transitive"
 					if work.dep.Direct {

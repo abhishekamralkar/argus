@@ -121,6 +121,9 @@ func (r *Registry) loadSO(path string) error {
 	case EcosystemPlugin:
 		r.Register(v)
 	case *EcosystemPlugin:
+		if v == nil {
+			return fmt.Errorf("symbol 'Plugin' is a nil pointer")
+		}
 		r.Register(*v)
 	default:
 		return fmt.Errorf("symbol 'Plugin' does not implement EcosystemPlugin")

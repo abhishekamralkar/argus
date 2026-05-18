@@ -13,9 +13,9 @@ import (
 )
 
 // downloadZip fetches url directly, with no caching.
-func downloadZip(url string) (*zip.Reader, error) {
+func downloadZip(ctx context.Context, url string) (*zip.Reader, error) {
 	// 10-minute deadline covers the full download of large feeds (OSV zips can be 300MB+).
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
@@ -46,9 +46,9 @@ func downloadZip(url string) (*zip.Reader, error) {
 }
 
 // fetchZip downloads url, using c when non-nil for ETag/Last-Modified caching.
-func fetchZip(url string, c *cache.Cache) (*zip.Reader, error) {
+func fetchZip(ctx context.Context, url string, c *cache.Cache) (*zip.Reader, error) {
 	if c != nil {
-		return c.DownloadZip(url)
+		return c.DownloadZip(ctx, url)
 	}
-	return downloadZip(url)
+	return downloadZip(ctx, url)
 }

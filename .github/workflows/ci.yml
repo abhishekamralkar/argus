@@ -24,12 +24,10 @@ jobs:
 
       - name: Test
         run: |
-          # Measure coverage only for internal packages; cmd/ is CLI wiring that
-          # requires integration tests, and ingest loaders require live HTTP.
           go test -race -timeout 120s \
             -coverprofile=coverage.out \
-            -coverpkg=$(go list ./internal/... | tr '\n' ',') \
-            ./internal/...
+            -coverpkg=$(go list ./internal/... ./cmd/... | tr '\n' ',') \
+            ./internal/... ./cmd/...
 
       - name: Coverage gate (≥ 55%)
         run: |
@@ -67,9 +65,9 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v9.2.0
         with:
-          version: latest
+          version: v1.64.8
           args: --timeout=5m
 
   tag:

@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -27,9 +28,9 @@ type rustSecAdvisory struct {
 
 // LoadRustSec downloads the RustSec advisory DB and calls fn per advisory.
 // Pass a non-nil cache to enable ETag/Last-Modified caching.
-func LoadRustSec(c *cache.Cache, fn func(*store.Vulnerability) error) error {
+func LoadRustSec(ctx context.Context, c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	return loadFromZip(
-		"https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip", c,
+		ctx, "https://github.com/rustsec/advisory-db/archive/refs/heads/main.zip", c,
 		func(name string) bool {
 			if !strings.HasSuffix(name, ".toml") {
 				return false

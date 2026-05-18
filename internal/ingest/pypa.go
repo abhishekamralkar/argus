@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -37,9 +38,9 @@ type pypaAdvisory struct {
 
 // LoadPyPA downloads the PyPA advisory DB and calls fn per advisory.
 // Pass a non-nil cache to enable ETag/Last-Modified caching.
-func LoadPyPA(c *cache.Cache, fn func(*store.Vulnerability) error) error {
+func LoadPyPA(ctx context.Context, c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	return loadFromZip(
-		"https://github.com/pypa/advisory-database/archive/refs/heads/main.zip", c,
+		ctx, "https://github.com/pypa/advisory-database/archive/refs/heads/main.zip", c,
 		func(name string) bool {
 			if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 				return false

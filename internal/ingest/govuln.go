@@ -53,11 +53,11 @@ type govulnIndexEntry struct {
 // LoadGoVulnDB fetches the Go vulnerability database via the v2 JSON API
 // (https://vuln.go.dev) and calls fn per entry. The index is ETag-cached via c
 // when non-nil. Individual advisories are fetched concurrently.
-func LoadGoVulnDB(c *cache.Cache, fn func(*store.Vulnerability) error) error {
+func LoadGoVulnDB(ctx context.Context, c *cache.Cache, fn func(*store.Vulnerability) error) error {
 	var indexData []byte
 	var err error
 	if c != nil {
-		indexData, err = c.DownloadBytes(govulnIndexURL)
+		indexData, err = c.DownloadBytes(ctx, govulnIndexURL)
 	} else {
 		indexData, err = fetchBytes(govulnIndexURL)
 	}

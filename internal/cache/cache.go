@@ -66,7 +66,7 @@ func (c *Cache) Size() (int64, error) {
 
 // DownloadZip fetches url, returning a cached copy when the server returns
 // HTTP 304 (Not Modified). Falls back to the on-disk cache on network errors.
-func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
+func (c *Cache) DownloadZip(ctx context.Context, url string) (*zip.Reader, error) {
 	key := urlKey(url)
 	zipPath := filepath.Join(c.dir, key+".zip")
 	metaPath := filepath.Join(c.dir, key+".json")
@@ -76,8 +76,8 @@ func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
 		_ = json.Unmarshal(raw, &m)
 	}
 
-	// 10-minute deadline matches the uncached downloader.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// 10-minute deadline covers the full download of large feeds (OSV zips can be 300MB+).
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
@@ -158,7 +158,7 @@ func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
 // DownloadBytes fetches url and returns the raw response body, using
 // ETag/Last-Modified caching just like DownloadZip. Falls back to the
 // on-disk cache on network errors.
-func (c *Cache) DownloadBytes(url string) ([]byte, error) {
+func (c *Cache) DownloadBytes(ctx context.Context, url string) ([]byte, error) {
 	key := urlKey(url)
 	dataPath := filepath.Join(c.dir, key+".dat")
 	metaPath := filepath.Join(c.dir, key+".json")
@@ -168,7 +168,7 @@ func (c *Cache) DownloadBytes(url string) ([]byte, error) {
 		_ = json.Unmarshal(raw, &m)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 )
@@ -26,6 +27,12 @@ func (s *DB) ensureBaselineTable(ctx context.Context) error {
 			scanned_at  TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY (project_key, dep_name, ecosystem)
 		)
+	`)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_baseline_project ON scan_baseline (project_key)
 	`)
 	return err
 }
@@ -69,12 +76,18 @@ func (s *DB) SaveBaseline(ctx context.Context, projectKey string, entries []Base
 		return err
 	}
 
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for _, e := range entries {
 		raw, err := json.Marshal(e.VulnIDs)
 		if err != nil {
 			return err
 		}
-		_, err = s.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO scan_baseline (project_key, dep_name, ecosystem, vuln_ids, scanned_at)
 			VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT (project_key, dep_name, ecosystem)
@@ -84,7 +97,7 @@ func (s *DB) SaveBaseline(ctx context.Context, projectKey string, entries []Base
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ResetBaseline removes all stored baseline entries for the project.
