@@ -155,6 +155,66 @@ func (c *Cache) DownloadZip(url string) (*zip.Reader, error) {
 	return readCachedZip(target)
 }
 
+// DownloadBytes fetches url and returns the raw response body, using
+// ETag/Last-Modified caching just like DownloadZip. Falls back to the
+// on-disk cache on network errors.
+func (c *Cache) DownloadBytes(url string) ([]byte, error) {
+	key := urlKey(url)
+	dataPath := filepath.Join(c.dir, key+".dat")
+	metaPath := filepath.Join(c.dir, key+".json")
+
+	var m meta
+	if raw, err := os.ReadFile(metaPath); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	if m.ETag != "" {
+		req.Header.Set("If-None-Match", m.ETag)
+	} else if m.LastModified != "" {
+		req.Header.Set("If-Modified-Since", m.LastModified)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return os.ReadFile(dataPath)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return os.ReadFile(dataPath)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("download %s: read body: %w", url, err)
+	}
+	if int64(len(data)) > maxFeedBytes {
+		return nil, fmt.Errorf("download %s: response exceeds 512 MB size limit", url)
+	}
+
+	if writeErr := os.WriteFile(dataPath, data, 0o600); writeErr == nil {
+		m = meta{
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: resp.Header.Get("Last-Modified"),
+			CachedAt:     time.Now().UTC(),
+		}
+		if b, jsonErr := json.Marshal(m); jsonErr == nil {
+			_ = os.WriteFile(metaPath, b, 0o600)
+		}
+	}
+	return data, nil
+}
+
 func readCachedZip(path string) (*zip.Reader, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

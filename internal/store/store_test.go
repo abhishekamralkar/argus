@@ -498,17 +498,16 @@ func TestListScanRuns_Limit(t *testing.T) {
 	}
 }
 
-// TestUpsertVulnMetaMultibyteContent guards against truncating advisory content
-// mid-rune, which would produce invalid UTF-8 and cause DuckDB to fail binding
-// the parameter (regression for GHSA-25rp-h46x-2hjm).
-func TestUpsertVulnMetaMultibyteContent(t *testing.T) {
+// TestBuildVulnContentUTF8Boundary guards against truncating advisory content
+// mid-rune, which produces invalid UTF-8 and causes DuckDB to reject the bind
+// parameter (regression for GHSA-25rp-h46x-2hjm, whose details contain em-dashes
+// that straddle the 4000-byte boundary).
+func TestBuildVulnContentUTF8Boundary(t *testing.T) {
 	db := openTemp(t)
 
-	// Build a summary + details whose combined UTF-8 encoding has a 3-byte rune
-	// (em-dash, U+2014) straddling the 4000-byte truncation boundary.
-	// ASCII prefix: 3998 bytes, then two em-dashes (3 bytes each) → rune starts at
-	// byte 3998, so a naive [:4000] cut lands inside it.
-	prefix := fmt.Sprintf("%03998d", 0) // 3998 ASCII bytes
+	// 3998 ASCII bytes + em-dash (U+2014, 3 bytes) → rune starts at byte 3998,
+	// so a naive [:4000] slice lands inside it and produces invalid UTF-8.
+	prefix := fmt.Sprintf("%03998d", 0)
 	v := &Vulnerability{
 		ID:        "TEST-MULTIBYTE-0001",
 		Ecosystem: "go",
