@@ -131,7 +131,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 		var err error
 		vec, err = e.embedder.Embed(ctx, query)
 		if err != nil {
-			result.Err = fmt.Errorf("embed query: %w", err)
+			result.Err = fmt.Errorf("embed %s@%s: %w", dep.Name, dep.Version, err)
 			return result, nil
 		}
 		e.embedMu.Lock()
@@ -141,7 +141,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 
 	hits, err := e.db.SearchBest(ctx, dep.Ecosystem, vec, e.cfg.TopK, e.cfg.SimilarityThreshold)
 	if err != nil {
-		result.Err = fmt.Errorf("vector search: %w", err)
+		result.Err = fmt.Errorf("vector search %s@%s: %w", dep.Name, dep.Version, err)
 		return result, nil
 	}
 
@@ -240,7 +240,7 @@ func (e *Engine) AnalyzeDependency(ctx context.Context, dep parser.Dependency, o
 	}))
 	result.LLMAnalysis = llmBuf.String()
 	if err != nil {
-		result.Err = err
+		result.Err = fmt.Errorf("llm query %s@%s: %w", dep.Name, dep.Version, err)
 	}
 	_, _ = fmt.Fprintln(out)
 	return result, nil
