@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"strings"
@@ -137,7 +137,7 @@ func (c *Client) Generate(ctx context.Context, prompt string, out io.Writer) err
 	for attempt := range maxAttempts {
 		if attempt > 0 {
 			base := time.Duration(attempt*attempt) * 2 * time.Second
-			time.Sleep(base + time.Duration(rand.Int63n(int64(base)/2)))
+			time.Sleep(base + time.Duration(rand.Int64N(int64(base)/2))) //nolint:gosec // non-crypto jitter for retry backoff
 		}
 		var err error
 		if c.openaiMode {

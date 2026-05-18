@@ -16,6 +16,12 @@ linters:
     - misspell
     - noctx
     - bodyclose
+    - errorlint
+    - durationcheck
+    - fatcontext
+    - canonicalheader
+    - forcetypeassert
+    - dupword
   settings:
     gosec:
       excludes:
