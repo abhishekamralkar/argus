@@ -19,7 +19,7 @@ jobs:
       security-events: write  # required for SARIF upload
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Option A: use Ollama locally (free, no API key needed).
       # Start Ollama as a background service and pull models.
